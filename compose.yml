@@ -1,0 +1,37 @@
+services:
+  postgres:
+    image: "postgres:17.7-alpine"
+    restart: "always"
+    ports:
+      - "5432:5432"
+    environment:
+      PG_USER: "indexer"
+      PG_DB: "indexer"
+      PG_PASSWORD: "indexer"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "indexer"]
+      interval: "5s"
+      timeout: "2s"
+      retries: 2
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  app:
+    image: "node:20-alpine"
+    tty: true
+    ports:
+      - "3000:3000"
+    depends_on:
+      - postgres
+    environment:
+      PG_USER: "indexer"
+      PG_DB: "indexer"
+      PG_PASSWORD: "indexer"
+      PG_HOST: "postgres"
+      PG_PORT: "5432"
+    volumes:
+      - ./src:/app
+    working_dir: /app
+
+volumes:
+  postgres_data:
