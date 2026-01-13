@@ -1,10 +1,8 @@
 -- =========================================================
--- Midnight Explorer DB Schema
+-- Migration: Initial schema for Midnight Explorer
 -- =========================================================
 
--- 任意: 専用スキーマを作る場合
-CREATE SCHEMA IF NOT EXISTS mn_preview_indexer;
-SET search_path TO mn_preview_indexer, public;
+SET search_path TO mn_preview_indexer;
 
 -- =========================================================
 -- 1. Blocks
@@ -202,7 +200,3 @@ CREATE INDEX IF NOT EXISTS idx_events_section_method
 
 CREATE INDEX IF NOT EXISTS idx_events_topics_gin
   ON events USING GIN (topics);
-
--- =========================================================
--- EOF
--- =========================================================

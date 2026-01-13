@@ -9,18 +9,14 @@
     // See also https://aka.ms/tsconfig/module
     "module": "CommonJS",
     "target": "ES2022",
+    "moduleResolution": "node",
     "types": ["node"],
     "baseUrl": ".",
     "paths": {
       "pg": ["types/pg"]
     },
-    // For nodejs:
-    "lib": [
-      "ES2023"
-    ],
-    // "types": ["node"],
-    // and npm install -D @types/node
-
+    // libを指定しないことで、targetから自動的に適切なlibが選択され、
+    // @types/nodeからのグローバル（console, process, fs等）も正しく読み込まれる
     // Other Outputs
     //"sourceMap": true,
     // "declaration": true,
@@ -52,4 +48,10 @@
 
   "include": ["**/*.ts"],
   "exclude": ["node_modules", "dist"],
+  "ts-node": {
+    "esm": false,
+    "compilerOptions": {
+      "module": "commonjs"
+    }
+  }
 }
