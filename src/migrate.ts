@@ -106,9 +106,9 @@ async function ensureMigrationsTable(client: PoolClient): Promise<void> {
         throw new Error('schema_migrationsテーブルの作成に失敗しました');
       }
       
-      // 0000_create_migrations_tableマイグレーションを記録
+      // 0000_create_migrations_tableマイグレーションを記録（既に存在する場合はスキップ）
       await client.query(
-        'INSERT INTO schema_migrations (version, name) VALUES ($1, $2)',
+        'INSERT INTO schema_migrations (version, name) VALUES ($1, $2) ON CONFLICT (version) DO NOTHING',
         ['0000', 'create_migrations_table']
       );
       
@@ -119,18 +119,12 @@ async function ensureMigrationsTable(client: PoolClient): Promise<void> {
       // テーブルが既に存在する場合はエラーを無視して続行
       if (error.code === '42P07') {
         console.log('ℹ️  schema_migrationsテーブルは既に存在します');
-        // テーブルは存在するが、マイグレーション記録がない場合は追加
+        // テーブルは存在するが、マイグレーション記録がない場合は追加（既に存在する場合はスキップ）
         try {
-          const existingCheck = await client.query(`
-            SELECT version FROM mn_preview_indexer.schema_migrations WHERE version = $1
-          `, ['0000']);
-          
-          if (existingCheck.rows.length === 0) {
-            await client.query(
-              'INSERT INTO mn_preview_indexer.schema_migrations (version, name) VALUES ($1, $2)',
-              ['0000', 'create_migrations_table']
-            );
-          }
+          await client.query(
+            'INSERT INTO mn_preview_indexer.schema_migrations (version, name) VALUES ($1, $2) ON CONFLICT (version) DO NOTHING',
+            ['0000', 'create_migrations_table']
+          );
         } catch (insertError) {
           // 挿入エラーは無視（既に存在する可能性がある）
         }
