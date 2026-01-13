@@ -155,7 +155,7 @@ export async function indexBlock(api: ApiPromise, blockNumber: number): Promise<
                     blockNumber,
                     header.parentHash.toString().substring(2).toLowerCase(),
                     blockNumber, // slotはheightと同じ値
-                    new Date(timestamp * 1000),
+                    new Date(timestamp),
                     block.extrinsics.length,
                     stateRoot.substring(2).toLowerCase(),
                     false,
@@ -178,7 +178,7 @@ export async function indexBlock(api: ApiPromise, blockNumber: number): Promise<
                 
                 for (let i = 0; i < block.extrinsics.length; i++) {
                     const extrinsic = block.extrinsics[i];
-                    if (!extrinsic) continue;
+            if (!extrinsic) continue;
                     
                     const method = extrinsic.method;
                     const signer = extrinsic.signer ? extrinsic.signer.toString() : null;
@@ -700,7 +700,7 @@ export async function indexBlock(api: ApiPromise, blockNumber: number): Promise<
                             hash.substring(2).toLowerCase(),
                             blockId,
                             i,
-                            new Date(timestamp * 1000),
+                            new Date(timestamp),
                             isShielded,
                             fee,
                             totalInputStr, // total_input (イベントから取得)
@@ -1545,7 +1545,7 @@ async function updateAccountsAndRelatedTables(
                 blockId,
                 {
                     output_id: note.outputId,
-                    created_at: new Date(timestamp * 1000).toISOString()
+                    created_at: new Date(timestamp).toISOString()
                 }
             ]);
         }

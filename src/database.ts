@@ -148,7 +148,7 @@ export async function connectPostgres(): Promise<Pool> {
   } catch (error) {
     console.error("❗ 予期しないPostgreSQL接続エラーが発生しました。", error);
     await pool.end().catch((e) => {
-      console.error("❗ 予期しないPostgreSQL接続エラーが発生しました。", error);
+      console.error("❗ PostgreSQL接続のクリーンアップ中にエラーが発生しました。", e);
     });
     pool = null;
     throw error;
@@ -168,7 +168,7 @@ export function getPostgresPool(): Pool {
 export async function withPgClient<T>(callback: (client: PoolClient) => Promise<T>): Promise<T> {
   const activePool = await connectPostgres();
   const client = await activePool.connect();
-  client.query('SET search_path TO mn_preview_indexer');
+  await client.query('SET search_path TO mn_preview_indexer');
 
   try {
     return await callback(client);
