@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { startIndexing } from './indexer';
 
 async function main() {

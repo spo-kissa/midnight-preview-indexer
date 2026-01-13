@@ -144,7 +144,6 @@ export async function connectPostgres(): Promise<Pool> {
       `🗄️ PostgreSQL に接続しました: ${config.host}:${config.port ?? 5432}/${config.database}`
     );
     await pool.query('SET search_path TO mn_preview_indexer');
-    await pool.query('SET LOCAL search_path TO mn_preview_indexer');
   } catch (error) {
     console.error("❗ 予期しないPostgreSQL接続エラーが発生しました。", error);
     await pool.end().catch((e) => {

@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { ApiPromise, WsProvider } from "@polkadot/api";
 import type { ProviderInterface } from "@polkadot/rpc-provider/types";
 import { connectPostgres, getLastBlockNumber, initializeDatabase, setState, withPgClient } from "./database";
@@ -155,7 +156,7 @@ export async function indexBlock(api: ApiPromise, blockNumber: number): Promise<
                     blockNumber,
                     header.parentHash.toString().substring(2).toLowerCase(),
                     blockNumber, // slotはheightと同じ値
-                    new Date(timestamp),
+                    new Date(timestamp * 1000),
                     block.extrinsics.length,
                     stateRoot.substring(2).toLowerCase(),
                     false,
@@ -700,7 +701,7 @@ export async function indexBlock(api: ApiPromise, blockNumber: number): Promise<
                             hash.substring(2).toLowerCase(),
                             blockId,
                             i,
-                            new Date(timestamp),
+                            new Date(timestamp * 1000),
                             isShielded,
                             fee,
                             totalInputStr, // total_input (イベントから取得)
@@ -1545,7 +1546,7 @@ async function updateAccountsAndRelatedTables(
                 blockId,
                 {
                     output_id: note.outputId,
-                    created_at: new Date(timestamp).toISOString()
+                    created_at: new Date(timestamp * 1000).toISOString()
                 }
             ]);
         }
