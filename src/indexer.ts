@@ -1551,8 +1551,9 @@ async function updateAccountsAndRelatedTables(
             ]);
         }
     } catch (err) {
-        console.warn(`Failed to update accounts and related tables:`, err);
-        // エラーは無視（トランザクションは続行）
+        console.error(`Failed to update accounts and related tables:`, err);
+        // エラーを再スローして、トランザクション全体をロールバックさせる
+        throw err;
     }
 }
 

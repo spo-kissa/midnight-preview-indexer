@@ -37,7 +37,7 @@ function parseNumber(value: NumericEnv, name: string): number | undefined {
 }
 
 function resolveSslConfig(): PoolConfig["ssl"] | undefined {
-  const raw = (process.env.PG_SSLMODE ?? process.env.PG_SSL ?? "").toLowerCase();
+  const raw = (process.env.PGSSLMODE ?? process.env.PGSSL ?? "").toLowerCase();
 
   if (!raw || raw === "disable" || raw === "false" || raw === "0") {
     return undefined;
