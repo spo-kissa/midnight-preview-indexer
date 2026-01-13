@@ -1,3 +1,11 @@
-import { startIndexing } from "./indexer";
+import 'dotenv/config';
+import { startIndexing } from './indexer';
 
-startIndexing();
+async function main() {
+  await startIndexing();
+}
+
+main().catch((err) => {
+  console.error('[indexer] fatal error', err);
+  process.exit(1);
+});

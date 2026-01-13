@@ -5,6 +5,8 @@ export type Block = {
     parent_hash: string;
     timestamp: number;
     extrinsics_count: number;
+    raw?: any; // blockオブジェクトから取得したrawデータ（ヘッダー情報など）
+    state_root?: string | null; // block.header.stateRoot
 };
 
 export type Extrinsic = {

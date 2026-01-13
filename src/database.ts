@@ -2,6 +2,16 @@
 import { Pool, type PoolClient, type PoolConfig } from "pg";
 import { Block, Extrinsic } from "types/chain";
 
+export interface Event {
+  blockId: number;
+  extrinsicId: number | null;
+  indexInBlock: number;
+  section: string;
+  method: string;
+  data: any;
+  topics?: any[] | null;
+}
+
 type NumericEnv = string | undefined;
 
 let pool: Pool | null = null;
@@ -133,9 +143,11 @@ export async function connectPostgres(): Promise<Pool> {
     console.log(
       `🗄️ PostgreSQL に接続しました: ${config.host}:${config.port ?? 5432}/${config.database}`
     );
+    await pool.query('SET search_path TO mn_preview_indexer');
   } catch (error) {
-    await pool.end().catch(() => {
-      // ignore secondary errors
+    console.error("❗ 予期しないPostgreSQL接続エラーが発生しました。", error);
+    await pool.end().catch((e) => {
+      console.error("❗ PostgreSQL接続のクリーンアップ中にエラーが発生しました。", e);
     });
     pool = null;
     throw error;
@@ -155,6 +167,7 @@ export function getPostgresPool(): Pool {
 export async function withPgClient<T>(callback: (client: PoolClient) => Promise<T>): Promise<T> {
   const activePool = await connectPostgres();
   const client = await activePool.connect();
+  await client.query('SET search_path TO mn_preview_indexer');
 
   try {
     return await callback(client);
@@ -172,74 +185,145 @@ export async function closePostgresPool(): Promise<void> {
   pool = null;
 }
 
+/**
+ * データベースをマイグレーションシステムを使用して初期化
+ * 既存のマイグレーションをすべて適用します
+ */
 export async function initializeDatabase(): Promise<void> {
-    await pool?.query(`CREATE TABLE IF NOT EXISTS blocks (
-        height BIGINT PRIMARY KEY,
-        hash VARCHAR(64) NOT NULL,
-        parent_hash VARCHAR(64) NOT NULL,
-        timestamp TIMESTAMP NOT NULL,
-        extrinsics_count INT DEFAULT 0,
-        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )`);
-
-    await pool?.query(`CREATE TABLE IF NOT EXISTS extrinsics (
-        id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-        hash VARCHAR(64) NOT NULL,
-        block_height BIGINT NOT NULL,
-        block_hash VARCHAR(64) NOT NULL,
-        index_in_block INT NOT NULL,
-        section TEXT NOT NULL,
-        method TEXT NOT NULL,
-        args TEXT NOT NULL,
-        data TEXT,
-        success INT NOT NULL DEFAULT 1,
-        timestamp TIMESTAMP NOT NULL,
-        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (block_height) REFERENCES blocks (height)
-    )`);
-
-    await pool?.query(`CREATE TABLE IF NOT EXISTS indexer_state (
-        key VARCHAR(255) PRIMARY KEY,
-        value TEXT NOT NULL
-    )`);
-
-    await pool?.query(`CREATE INDEX IF NOT EXISTS idx_blocks_hash ON blocks(hash)`);
-    await pool?.query('CREATE INDEX IF NOT EXISTS idx_extrinsics_hash ON extrinsics(hash)');
-    await pool?.query(`CREATE INDEX IF NOT EXISTS idx_extrinsics_block_height ON extrinsics(block_height)`);
-    await pool?.query(`CREATE INDEX IF NOT EXISTS idx_extrinsics_block_hash ON extrinsics(block_hash)`);
-    await pool?.query(`CREATE INDEX IF NOT EXISTS idx_extrinsics_section ON extrinsics(section)`);
-    await pool?.query(`CREATE INDEX IF NOT EXISTS idx_indexer_state_key ON indexer_state(key)`);
-
-    console.log('✅ Database initialized');
+  // 循環依存を避けるため、動的インポートを使用
+  const migrateModule = await import('./migrate');
+  await migrateModule.runMigrations();
 }
 
-
 export async function getState(key: string): Promise<string | null> {
-    const row = await pool?.query<{ value: string }>(`SELECT value FROM indexer_state WHERE key = $1`, [key]);
+    const row = await pool?.query<{ value: string }>(
+      `SELECT value FROM indexer_state WHERE key = $1`,
+      [key]
+    );
     return row?.rows[0]?.value ?? null;
 }
 
 export async function setState(key: string, value: string): Promise<void> {
-    await pool?.query(`INSERT INTO indexer_state (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2`, [key, value]);
+    await pool?.query(
+      `INSERT INTO indexer_state (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2`,
+      [key, value]
+    );
 }
 
 export async function insertBlock(block: Block): Promise<void> {
     await pool?.query(`INSERT INTO blocks
-        (height, hash, parent_hash, timestamp, extrinsics_count)
-        VALUES ($1, $2, $3, $4, $5)`,
-        [block.height, block.hash, block.parent_hash, new Date(block.timestamp), block.extrinsics_count]
+        (hash, height, parent_hash, slot, timestamp, tx_count, state_root, is_finalized, raw)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        ON CONFLICT (height) DO UPDATE SET
+          hash = EXCLUDED.hash,
+          parent_hash = EXCLUDED.parent_hash,
+          slot = EXCLUDED.slot,
+          timestamp = EXCLUDED.timestamp,
+          tx_count = EXCLUDED.tx_count,
+          state_root = EXCLUDED.state_root,
+          is_finalized = EXCLUDED.is_finalized,
+          raw = EXCLUDED.raw`,
+        [
+          block.hash,
+          block.height,
+          block.parent_hash,
+          block.height, // slotはheightと同じ値を使用（Midnightの仕様に合わせて調整可能）
+          new Date(block.timestamp * 1000),
+          block.extrinsics_count,
+          block.state_root || null,
+          false, // is_finalizedは後で更新
+          block.raw || {} // blockから取得したrawデータ、なければ空オブジェクト
+        ]
     );
 }
 
-export async function insertExtrinsic(extrinsic: Extrinsic): Promise<void> {
-    await pool?.query(`INSERT INTO extrinsics
-        (hash, block_height, block_hash, index_in_block, section, method, args, data, success, timestamp)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-        [extrinsic.hash, extrinsic.block_height, extrinsic.block_hash, extrinsic.index_in_block, extrinsic.section, extrinsic.method, extrinsic.args, extrinsic.data, extrinsic.success, new Date(extrinsic.timestamp)]
+export async function insertExtrinsic(extrinsic: Extrinsic & { signer?: string | null; raw?: any }): Promise<number> {
+    // blocksテーブルからblock_idを取得
+    const blockResult = await pool?.query<{ id: number }>(
+      `SELECT id FROM blocks WHERE height = $1`,
+      [extrinsic.block_height]
     );
+    const blockId = blockResult?.rows[0]?.id;
+    
+    if (!blockId) {
+      throw new Error(`Block with height ${extrinsic.block_height} not found`);
+    }
+
+    // argsが既にJSON文字列の場合はパース、そうでなければそのまま使用
+    let argsJson: any;
+    try {
+      argsJson = typeof extrinsic.args === 'string' ? JSON.parse(extrinsic.args) : extrinsic.args;
+    } catch {
+      argsJson = extrinsic.args;
+    }
+
+    const result = await pool?.query<{ id: number }>(`
+      INSERT INTO extrinsics
+        (block_id, index_in_block, section, method, signer, args, raw)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ON CONFLICT (block_id, index_in_block) DO UPDATE SET
+          section = EXCLUDED.section,
+          method = EXCLUDED.method,
+          signer = EXCLUDED.signer,
+          args = EXCLUDED.args,
+          raw = EXCLUDED.raw
+        RETURNING id
+    `, [
+          blockId,
+          extrinsic.index_in_block,
+          extrinsic.section,
+          extrinsic.method,
+          extrinsic.signer || null,
+          argsJson,
+          extrinsic.raw || { 
+            hash: extrinsic.hash, 
+            block_hash: extrinsic.block_hash,
+            data: extrinsic.data, 
+            success: extrinsic.success,
+            timestamp: extrinsic.timestamp
+          }
+        ]
+    );
+    
+    return result?.rows[0]?.id || 0;
+}
+
+/**
+ * イベントをeventsテーブルに保存
+ */
+export async function insertEvent(params: {
+  blockId: number;
+  extrinsicId: number | null;
+  indexInBlock: number;
+  section: string;
+  method: string;
+  data: any;
+  topics?: any[] | null;
+}): Promise<void> {
+  await pool?.query(`
+    INSERT INTO events (
+      block_id, extrinsic_id, index_in_block, section, method, data, topics
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+    ON CONFLICT (block_id, index_in_block) DO UPDATE SET
+      extrinsic_id = EXCLUDED.extrinsic_id,
+      section = EXCLUDED.section,
+      method = EXCLUDED.method,
+      data = EXCLUDED.data,
+      topics = EXCLUDED.topics
+  `, [
+    params.blockId,
+    params.extrinsicId,
+    params.indexInBlock,
+    params.section,
+    params.method,
+    params.data,
+    params.topics || null
+  ]);
 }
 
 export async function getLastBlockNumber(): Promise<number> {
-    const row = await pool?.query<{ value: number }>(`SELECT MAX(height) AS value FROM blocks`);
-    return row?.rows[0]?.value ?? 0;
+  const row = await pool?.query<{ value: number }>(
+    `SELECT MAX(height) AS value FROM blocks`
+  );
+  return row?.rows[0]?.value ?? 0;
 }

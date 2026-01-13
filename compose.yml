@@ -1,13 +1,13 @@
 services:
   postgres:
-    image: "postgres:17.7-alpine"
+    image: "postgres:18.1-alpine"
     restart: "always"
     ports:
       - "5432:5432"
     environment:
-      PG_USER: "indexer"
-      PG_DB: "indexer"
-      PG_PASSWORD: "indexer"
+      POSTGRES_USER: "indexer"
+      POSTGRES_DB: "indexer"
+      POSTGRES_PASSWORD: "indexer"
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "indexer"]
       interval: "5s"
@@ -20,17 +20,13 @@ services:
     image: "node:20-alpine"
     tty: true
     ports:
-      - "3000:3000"
+      - "3005:3000"
     depends_on:
       - postgres
-    environment:
-      PG_USER: "indexer"
-      PG_DB: "indexer"
-      PG_PASSWORD: "indexer"
-      PG_HOST: "postgres"
-      PG_PORT: "5432"
+    env_file: src/production.env
     volumes:
       - ./src:/app
+      - ./migrations:/migrations
     working_dir: /app
 
 volumes:
