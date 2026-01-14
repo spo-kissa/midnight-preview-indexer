@@ -8,6 +8,7 @@ services:
       POSTGRES_USER: "indexer"
       POSTGRES_DB: "indexer"
       POSTGRES_PASSWORD: "indexer"
+      TZ: "UTC"
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "indexer"]
       interval: "5s"

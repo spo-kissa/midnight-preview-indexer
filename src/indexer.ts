@@ -4,7 +4,7 @@ import type { ProviderInterface } from "@polkadot/rpc-provider/types";
 import { connectPostgres, getLastBlockNumber, initializeDatabase, setState, withPgClient } from "./database";
 
 const WS_RPC_ENDPOINT = process.env.MIDNIGHT_WS_ENDPOINT || 'wss://rpc.preview.midnight.network';
-const BATCH_SIZE = 100;
+const BATCH_SIZE = 2;
 
 let api: ApiPromise | null = null;
 let isIndexing = false;
@@ -12,12 +12,12 @@ let isIndexing = false;
 export async function connectToChain(): Promise<ApiPromise> {
     if (api && api.isConnected) return api;
 
-    console.log('[indexer] 🔌 Connecting to Midnight RPC: ', WS_RPC_ENDPOINT);
+    console.log('[indexer] 🔌 Connecting to Midnight RPC:', WS_RPC_ENDPOINT);
 
     const provider = new WsProvider(WS_RPC_ENDPOINT);
     api = await ApiPromise.create({
         provider: provider as ProviderInterface,
-        noInitWarn: false
+        noInitWarn: true // カスタムRPCメソッドの警告を抑制
     });
 
     const chain = await api.rpc.system.chain();
@@ -30,7 +30,10 @@ export async function connectToChain(): Promise<ApiPromise> {
 }
 
 
-export async function indexBlock(api: ApiPromise, blockNumber: number): Promise<number> {
+export async function indexBlock(api: ApiPromise, blockNumber: number, retryCount: number = 0, finalizedBlockHeight?: number): Promise<number> {
+    const MAX_RETRIES = 3;
+    const RETRY_DELAY = 1000; // 1秒
+    
     try {
         const blockHash = await api.rpc.chain.getBlockHash(blockNumber);
         const signedBlock = await api.rpc.chain.getBlock(blockHash);
@@ -40,6 +43,9 @@ export async function indexBlock(api: ApiPromise, blockNumber: number): Promise<
         const header = signedBlock.block.header;
         const stateRoot = header.stateRoot.toString();
         const block = signedBlock.block;
+        
+        // ファイナライズ状態を判定
+        const isFinalized = finalizedBlockHeight !== undefined && blockNumber <= finalizedBlockHeight;
         
         // イベント情報も取得（可能であれば）
         let events: any = null;
@@ -156,10 +162,10 @@ export async function indexBlock(api: ApiPromise, blockNumber: number): Promise<
                     blockNumber,
                     header.parentHash.toString().substring(2).toLowerCase(),
                     blockNumber, // slotはheightと同じ値
-                    new Date(timestamp * 1000),
+                    toDate(timestamp),
                     block.extrinsics.length,
                     stateRoot.substring(2).toLowerCase(),
-                    false,
+                    isFinalized,
                     rawData
                 ]);
 
@@ -701,7 +707,7 @@ export async function indexBlock(api: ApiPromise, blockNumber: number): Promise<
                             hash.substring(2).toLowerCase(),
                             blockId,
                             i,
-                            new Date(timestamp * 1000),
+                            toDate(timestamp),
                             isShielded,
                             fee,
                             totalInputStr, // total_input (イベントから取得)
@@ -1405,14 +1411,30 @@ export async function indexBlock(api: ApiPromise, blockNumber: number): Promise<
                 }
                 
                 await client.query('COMMIT');
-            } catch (error) {
+    } catch (error) {
                 await client.query('ROLLBACK');
                 throw error;
             }
         });
 
         return block.extrinsics.length;
-    } catch (error) {
+    } catch (error: any) {
+        // タイムアウトエラーの場合、リトライを試みる
+        const errorMessage = error?.message || String(error || '');
+        const isTimeoutError = (
+            errorMessage.includes('No response received') ||
+            errorMessage.includes('timeout') ||
+            errorMessage.includes('TIMEOUT') ||
+            errorMessage.includes('RPC-CORE')
+        );
+        
+        if (retryCount < MAX_RETRIES && isTimeoutError) {
+            const delay = RETRY_DELAY * Math.pow(2, retryCount); // 指数バックオフ: 1s, 2s, 4s
+            console.warn(`⚠️ Retrying block ${blockNumber} (attempt ${retryCount + 1}/${MAX_RETRIES}) after ${delay}ms...`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+            return await indexBlock(api, blockNumber, retryCount + 1, finalizedBlockHeight);
+        }
+        
         console.error(`❌ Error indexing block ${blockNumber}:`, error);
         return 0;
     }
@@ -1546,7 +1568,7 @@ async function updateAccountsAndRelatedTables(
                 blockId,
                 {
                     output_id: note.outputId,
-                    created_at: new Date(timestamp * 1000).toISOString()
+                    created_at: toDate(timestamp).toISOString()
                 }
             ]);
         }
@@ -1554,6 +1576,48 @@ async function updateAccountsAndRelatedTables(
         console.error(`Failed to update accounts and related tables:`, err);
         // エラーを再スローして、トランザクション全体をロールバックさせる
         throw err;
+    }
+}
+
+/**
+ * timestampをDateに変換
+ * @param timestamp Unix timestamp (ミリ秒単位)
+ * @returns Dateオブジェクト（UTC）
+ */
+function toDate(timestamp: number): Date {
+    const dt = new Date(timestamp);
+    if (isNaN(dt.getTime()) || dt.getFullYear() < 2025 || dt.getFullYear() > 2026) {
+        console.log('timestamp *= 1000');
+        return new Date(timestamp * 1000);
+    }
+    if (dt.getMilliseconds() !== 0) {
+        console.log('dt.getMilliseconds():', 0);
+        dt.setMilliseconds(0);
+    }
+    console.log('dt:', dt);
+    return dt;
+}
+
+/**
+ * ファイナライズ状態を更新する
+ */
+async function updateFinalizedBlocks(api: ApiPromise): Promise<void> {
+    try {
+        const finalizedHash = await api.rpc.chain.getFinalizedHead();
+        const finalizedHeader = await api.rpc.chain.getHeader(finalizedHash);
+        const finalizedBlockHeight = finalizedHeader.number.toNumber();
+        
+        await withPgClient(async (client) => {
+            await client.query(`
+                UPDATE blocks
+                SET is_finalized = true
+                WHERE height <= $1 AND is_finalized = false
+            `, [finalizedBlockHeight]);
+        });
+        
+        console.log(`✅ Updated finalized status for blocks up to ${finalizedBlockHeight.toLocaleString()}`);
+    } catch (err) {
+        console.warn(`Failed to update finalized blocks:`, err);
     }
 }
 
@@ -1631,12 +1695,24 @@ export async function startIndexing(): Promise<void> {
     while (currentBlock <= latestBlock && isIndexing) {
         const batchEnd = Math.min(currentBlock + BATCH_SIZE - 1, latestBlock);
 
-        const promises: Promise<number>[] = [];
-        for (let i = currentBlock; i <= batchEnd; i++) {
-            promises.push(indexBlock(api, i));
+        // ファイナライズされたブロックの高さを取得（バッチごとに1回）
+        let finalizedBlockHeight: number | undefined;
+        try {
+            const finalizedHash = await api.rpc.chain.getFinalizedHead();
+            const finalizedHeader = await api.rpc.chain.getHeader(finalizedHash);
+            finalizedBlockHeight = finalizedHeader.number.toNumber();
+        } catch (err) {
+            // ファイナライズされたブロックの高さの取得に失敗しても続行
+            console.warn(`Failed to get finalized block height:`, err);
         }
 
-        const results = await Promise.all(promises);
+        // RPC負荷を最小限に抑えるため、シーケンシャル処理に変更
+        const results: number[] = [];
+        for (let i = currentBlock; i <= batchEnd; i++) {
+            const result = await indexBlock(api, i, 0, finalizedBlockHeight);
+            results.push(result);
+        }
+        
         const batchExtrinsecs = results.reduce((a, b) => a + b, 0);
         totalExtrinsics += batchExtrinsecs;
 
@@ -1655,11 +1731,20 @@ export async function startIndexing(): Promise<void> {
     console.log(`🔍 Last block: ${lastBlockNumber.toLocaleString()}`);
 
     console.log('👀 Subscribing to new blocks...');
+    let lastFinalizedUpdateBlock = 0;
+    const FINALIZED_UPDATE_INTERVAL = 5; // 5ブロックごとにファイナライズ状態を更新
+    
     await api.rpc.chain.subscribeNewHeads(async (header) => {
         const blockNumber = header.number.toNumber();
         const extrinsicCount = await indexBlock(api, blockNumber);
 
         console.log(`🆕 Block ${blockNumber.toLocaleString()} indexed (${extrinsicCount} extrinsics)`);
+        
+        // 定期的にファイナライズ状態を更新
+        if (blockNumber - lastFinalizedUpdateBlock >= FINALIZED_UPDATE_INTERVAL) {
+            await updateFinalizedBlocks(api);
+            lastFinalizedUpdateBlock = blockNumber;
+        }
     });
 }
 

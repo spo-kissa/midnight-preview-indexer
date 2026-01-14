@@ -143,7 +143,18 @@ export async function connectPostgres(): Promise<Pool> {
     console.log(
       `🗄️ PostgreSQL に接続しました: ${config.host}:${config.port ?? 5432}/${config.database}`
     );
+    
     await pool.query('SET search_path TO mn_preview_indexer');
+    // データベースレベルでタイムゾーンをUTCに設定
+    try {
+      await pool.query(`ALTER DATABASE ${config.database} SET timezone TO 'UTC'`);
+    } catch (error: any) {
+      // データベースが存在しない場合や権限エラーの場合は無視
+      // 既に設定されている場合は警告のみ
+      if (error.code !== '3D000' && error.code !== '42501') {
+        console.warn(`⚠️ データベースのタイムゾーン設定に失敗しました: ${error.message}`);
+      }
+    }
   } catch (error) {
     console.error("❗ 予期しないPostgreSQL接続エラーが発生しました。", error);
     await pool.end().catch((e) => {
@@ -168,6 +179,7 @@ export async function withPgClient<T>(callback: (client: PoolClient) => Promise<
   const activePool = await connectPostgres();
   const client = await activePool.connect();
   await client.query('SET search_path TO mn_preview_indexer');
+  await client.query("SET timezone = 'UTC'");
 
   try {
     return await callback(client);
