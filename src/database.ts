@@ -222,6 +222,38 @@ export async function setState(key: string, value: string): Promise<void> {
     );
 }
 
+/**
+ * 全てのデータをクリア（スキーマとマイグレーション情報は保持）
+ */
+export async function clearAllData(): Promise<void> {
+    await withPgClient(async (client) => {
+        await client.query('BEGIN');
+        
+        try {
+            // 全てのテーブルを一度にTRUNCATE CASCADE
+            // CASCADEにより、外部キー制約のあるテーブルも自動的に処理される
+            await client.query(`
+                TRUNCATE TABLE 
+                    blocks,
+                    accounts,
+                    account_balances,
+                    account_tx,
+                    shielded_notes,
+                    extrinsics,
+                    events,
+                    indexer_state
+                CASCADE
+            `);
+            
+            await client.query('COMMIT');
+            console.log('✅ 全てのデータをクリアしました');
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        }
+    });
+}
+
 export async function insertBlock(block: Block): Promise<void> {
     await pool?.query(`INSERT INTO blocks
         (hash, height, parent_hash, slot, timestamp, tx_count, state_root, is_finalized, raw)

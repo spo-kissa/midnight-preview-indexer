@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { ApiPromise, WsProvider } from "@polkadot/api";
 import type { ProviderInterface } from "@polkadot/rpc-provider/types";
-import { connectPostgres, getLastBlockNumber, initializeDatabase, setState, withPgClient } from "./database";
+import { connectPostgres, getLastBlockNumber, getState, initializeDatabase, setState, withPgClient } from "./database";
 
 const WS_RPC_ENDPOINT = process.env.MIDNIGHT_WS_ENDPOINT || 'wss://rpc.preview.midnight.network';
 const BATCH_SIZE = 2;
@@ -310,7 +310,7 @@ export async function indexBlock(api: ApiPromise, blockNumber: number, retryCoun
                 // 5. Transactionsを保存（Txとして扱うextrinsicを判定）
                 for (let i = 0; i < block.extrinsics.length; i++) {
                     const extrinsic = block.extrinsics[i];
-            if (!extrinsic) continue;
+                    if (!extrinsic) continue;
                     
                     const method = extrinsic.method;
                     const section = method.section;
@@ -321,7 +321,10 @@ export async function indexBlock(api: ApiPromise, blockNumber: number, retryCoun
                     // Txとして扱うか判定
                     if (isTransactionLike(section, methodName, isSigned)) {
                         const extrinsicId = extrinsicIds.get(i);
-                        if (!extrinsicId) continue;
+                        if (!extrinsicId){
+                            console.warn(`Failed to get extrinsic ID for block ${blockNumber}:`, extrinsic);
+                            continue;
+                        }
                         
                         const extrinsicEvents = extrinsicEventsMap.get(i) || [];
                         const hash = extrinsic.hash.toString();
@@ -1587,14 +1590,11 @@ async function updateAccountsAndRelatedTables(
 function toDate(timestamp: number): Date {
     const dt = new Date(timestamp);
     if (isNaN(dt.getTime()) || dt.getFullYear() < 2025 || dt.getFullYear() > 2026) {
-        console.log('timestamp *= 1000');
         return new Date(timestamp * 1000);
     }
     if (dt.getMilliseconds() !== 0) {
-        console.log('dt.getMilliseconds():', 0);
         dt.setMilliseconds(0);
     }
-    console.log('dt:', dt);
     return dt;
 }
 
@@ -1675,7 +1675,7 @@ export async function startIndexing(): Promise<void> {
     console.log(`📊 Latest block on chain: ${latestBlock.toLocaleString()}`);
 
     let startBlock: number;
-    const lastBlockNumber = await getLastBlockNumber();
+    const lastBlockNumber = Number(await getState('last_indexed_block'));
 
     if (lastBlockNumber > 0) {
         startBlock = lastBlockNumber + 1;
@@ -1728,7 +1728,35 @@ export async function startIndexing(): Promise<void> {
     }
 
     console.log(`✅ Initial indexing complete!`);
-    console.log(`🔍 Last block: ${lastBlockNumber.toLocaleString()}`);
+    
+    // 初期インデックス処理中に生成された新しいブロックを処理
+    const lastIndexedBlock = Number(await getState('last_indexed_block')) || 0;
+    const currentLatestHeader = await api.rpc.chain.getHeader();
+    const currentLatestBlock = currentLatestHeader.number.toNumber();
+    
+    if (currentLatestBlock > lastIndexedBlock) {
+        console.log(`🔍 Processing gap: blocks ${(lastIndexedBlock + 1).toLocaleString()} to ${currentLatestBlock.toLocaleString()}`);
+        
+        // ファイナライズされたブロックの高さを取得
+        let finalizedBlockHeight: number | undefined;
+        try {
+            const finalizedHash = await api.rpc.chain.getFinalizedHead();
+            const finalizedHeader = await api.rpc.chain.getHeader(finalizedHash);
+            finalizedBlockHeight = finalizedHeader.number.toNumber();
+        } catch (err) {
+            console.warn(`Failed to get finalized block height:`, err);
+        }
+        
+        // 取りこぼしたブロックを処理
+        for (let blockNumber = lastIndexedBlock + 1; blockNumber <= currentLatestBlock && isIndexing; blockNumber++) {
+            const extrinsicCount = await indexBlock(api, blockNumber, 0, finalizedBlockHeight);
+            await setState('last_indexed_block', blockNumber.toString());
+            console.log(`📦 Gap block ${blockNumber.toLocaleString()} indexed (${extrinsicCount} extrinsics)`);
+        }
+    }
+    
+    const finalLastBlock = Number(await getState('last_indexed_block')) || 0;
+    console.log(`🔍 Last indexed block: ${finalLastBlock.toLocaleString()}`);
 
     console.log('👀 Subscribing to new blocks...');
     let lastFinalizedUpdateBlock = 0;
