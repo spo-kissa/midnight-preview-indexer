@@ -254,6 +254,51 @@ export async function clearAllData(): Promise<void> {
     });
 }
 
+/**
+ * 既存データのhashをrawカラムから取得して更新
+ */
+export async function backfillExtrinsicHashes(): Promise<void> {
+    await withPgClient(async (client) => {
+        await client.query('BEGIN');
+        
+        try {
+            // hashがNULLのレコード数を取得
+            const countResult = await client.query<{ count: string }>(`
+                SELECT COUNT(*) as count
+                FROM extrinsics
+                WHERE hash IS NULL AND raw->>'hash' IS NOT NULL
+            `);
+            const totalCount = parseInt(countResult.rows[0]?.count || '0', 10);
+            
+            if (totalCount === 0) {
+                console.log('✅ 更新対象のレコードはありません');
+                await client.query('COMMIT');
+                return;
+            }
+            
+            console.log(`📦 ${totalCount.toLocaleString()}件のレコードを更新します...`);
+            
+            // rawカラムからhashを取得して更新
+            // raw->>'hash'から取得した値は'0x...'形式なので、プレフィックスを除去して小文字に変換
+            const updateResult = await client.query<{ count: string }>(`
+                UPDATE extrinsics
+                SET hash = LOWER(SUBSTRING(raw->>'hash' FROM 3))
+                WHERE hash IS NULL 
+                  AND raw->>'hash' IS NOT NULL
+                  AND raw->>'hash' != ''
+            `);
+            
+            const updatedCount = parseInt(updateResult.rowCount?.toString() || '0', 10);
+            
+            await client.query('COMMIT');
+            console.log(`✅ ${updatedCount.toLocaleString()}件のレコードを更新しました`);
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        }
+    });
+}
+
 export async function insertBlock(block: Block): Promise<void> {
     await pool?.query(`INSERT INTO blocks
         (hash, height, parent_hash, slot, timestamp, tx_count, state_root, is_finalized, raw)

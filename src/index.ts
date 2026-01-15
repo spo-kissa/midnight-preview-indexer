@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { startIndexing, indexBlock, connectToChain } from './indexer';
-import { connectPostgres, clearAllData } from './database';
+import { connectPostgres, clearAllData, backfillExtrinsicHashes } from './database';
 
 async function main() {
   // コマンドライン引数からブロック番号を取得
@@ -25,6 +25,22 @@ async function main() {
       return;
     }
     
+    // hashバックフィルコマンド
+    if (command === '--backfill-hash' || command === 'backfill-hash') {
+      console.log('🔄 既存データのhashをrawカラムから取得して更新します...');
+      
+      try {
+        await connectPostgres();
+        await backfillExtrinsicHashes();
+        console.log('✅ hashバックフィルが完了しました');
+        process.exit(0);
+      } catch (err) {
+        console.error('[indexer] fatal error', err);
+        process.exit(1);
+      }
+      return;
+    }
+    
     // 特定のブロック番号を指定した場合
     const blockNumber = parseInt(args[0], 10);
     
@@ -34,6 +50,7 @@ async function main() {
       console.error('  npm run dev                    # 通常のインデックス処理');
       console.error('  npm run dev <ブロック番号>      # 特定のブロックをインデックス');
       console.error('  npm run dev --clear            # 全てのデータをクリア');
+      console.error('  npm run dev --backfill-hash    # 既存データのhashをrawから更新');
       process.exit(1);
     }
     

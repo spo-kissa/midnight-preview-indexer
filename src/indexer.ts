@@ -203,16 +203,19 @@ export async function indexBlock(api: ApiPromise, blockNumber: number, retryCoun
                         args: extrinsicsRaw[i]?.method?.args || []
                     };
                     
+                    const extrinsicHash = extrinsic.hash.toString().substring(2).toLowerCase();
+                    
                     const extrinsicResult = await client.query<{ id: number }>(`
                         INSERT INTO extrinsics
-                            (block_id, index_in_block, section, method, signer, args, raw)
-                            VALUES ($1, $2, $3, $4, $5, $6, $7)
+                            (block_id, index_in_block, section, method, signer, args, raw, hash)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                             ON CONFLICT (block_id, index_in_block) DO UPDATE SET
                                 section = EXCLUDED.section,
                                 method = EXCLUDED.method,
                                 signer = EXCLUDED.signer,
                                 args = EXCLUDED.args,
-                                raw = EXCLUDED.raw
+                                raw = EXCLUDED.raw,
+                                hash = EXCLUDED.hash
                             RETURNING id
                     `, [
                         blockId,
@@ -221,7 +224,8 @@ export async function indexBlock(api: ApiPromise, blockNumber: number, retryCoun
                         method.method,
                         signer,
                         { 'args': extrinsicRaw.args }, // rawオブジェクトのargsキーの値を使用
-                        extrinsicRaw
+                        extrinsicRaw,
+                        extrinsicHash
                     ]);
                     
                     const extrinsicId = extrinsicResult.rows[0]?.id;
