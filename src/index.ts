@@ -44,11 +44,11 @@ async function main() {
     // 特定のブロック番号を指定した場合
     const blockNumber = parseInt(args[0], 10);
     
-    if (isNaN(blockNumber) || blockNumber < 1) {
+    if (isNaN(blockNumber) || blockNumber < 0) {
       console.error('❌ 無効なブロック番号です。正の整数を指定してください。');
       console.error('使用方法:');
       console.error('  npm run dev                    # 通常のインデックス処理');
-      console.error('  npm run dev <ブロック番号>      # 特定のブロックをインデックス');
+      console.error('  npm run dev <ブロック番号>     # 特定のブロックをインデックス');
       console.error('  npm run dev --clear            # 全てのデータをクリア');
       console.error('  npm run dev --backfill-hash    # 既存データのhashをrawから更新');
       process.exit(1);

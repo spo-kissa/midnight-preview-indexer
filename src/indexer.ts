@@ -185,14 +185,15 @@ export async function indexBlock(api: ApiPromise, blockNumber: number, retryCoun
                 
                 for (let i = 0; i < block.extrinsics.length; i++) {
                     const extrinsic = block.extrinsics[i];
-            if (!extrinsic) continue;
+                    if (!extrinsic) continue;
                     
                     const method = extrinsic.method;
                     const signer = extrinsic.signer ? extrinsic.signer.toString() : null;
-                    
+
                     // rawデータを構築（argsを含める）
+                    const hashStr = extrinsic.hash ? extrinsic.hash.toString() : null;
                     const extrinsicRaw: any = {
-                        hash: extrinsic.hash.toString(),
+                        hash: hashStr,
                         data: Buffer.from(extrinsic.data).toString('hex'),
                         signature: extrinsic.signature ? extrinsic.signature.toString() : null,
                         era: extrinsic.era ? extrinsic.era.toHuman() : null,
@@ -203,7 +204,18 @@ export async function indexBlock(api: ApiPromise, blockNumber: number, retryCoun
                         args: extrinsicsRaw[i]?.method?.args || []
                     };
                     
-                    const extrinsicHash = extrinsic.hash.toString().substring(2).toLowerCase();
+                    // hashを計算（0xプレフィックスを除去して小文字に変換）
+                    let extrinsicHash: string | null = null;
+                    if (hashStr) {
+                        if (hashStr.startsWith('0x')) {
+                            extrinsicHash = hashStr.substring(2).toLowerCase();
+                        } else {
+                            extrinsicHash = hashStr.toLowerCase();
+                        }
+                    } else {
+                        // hashが存在しない場合、警告を出力
+                        console.warn(`⚠️ Block ${blockNumber}, extrinsic ${i}: hash is missing`);
+                    }
                     
                     const extrinsicResult = await client.query<{ id: number }>(`
                         INSERT INTO extrinsics
@@ -227,6 +239,11 @@ export async function indexBlock(api: ApiPromise, blockNumber: number, retryCoun
                         extrinsicRaw,
                         extrinsicHash
                     ]);
+                    
+                    // デバッグ: hashがNULLの場合に警告
+                    if (!extrinsicHash) {
+                        console.warn(`⚠️ Block ${blockNumber}, extrinsic ${i}: hash is NULL after insertion`);
+                    }
                     
                     const extrinsicId = extrinsicResult.rows[0]?.id;
                     if (extrinsicId) {
