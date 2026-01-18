@@ -3,6 +3,8 @@ import { ApiPromise, WsProvider } from "@polkadot/api";
 import type { ProviderInterface } from "@polkadot/rpc-provider/types";
 import { connectPostgres, getLastBlockNumber, getState, initializeDatabase, setState, withPgClient } from "./database";
 import type { BlocksSubscription } from "./graphql/generated";
+import type { SignedBlock, Header } from "@polkadot/types/interfaces";
+import { subscribe } from './midnight-indexer';
 
 const WS_RPC_ENDPOINT = process.env.MIDNIGHT_WS_ENDPOINT || 'wss://rpc.preview.midnight.network';
 const BATCH_SIZE = 2;
@@ -26,7 +28,7 @@ export async function connectToChain(): Promise<ApiPromise> {
     const nodeVersion = await api.rpc.system.version();
 
     console.log(`[indexer] ✅ Connected to ${chain} via ${nodeName} v${nodeVersion}`)
-    
+
     return api;
 }
 
@@ -162,7 +164,7 @@ export async function indexBlock(api: ApiPromise, blockNumber: number, retryCoun
                     blockHash.toString().substring(2).toLowerCase(),
                     blockNumber,
                     header.parentHash.toString().substring(2).toLowerCase(),
-                    blockNumber, // slotはheightと同じ値
+                    blockNumber,
                     toDate(timestamp),
                     block.extrinsics.length,
                     stateRoot.substring(2).toLowerCase(),
@@ -1436,7 +1438,7 @@ export async function indexBlock(api: ApiPromise, blockNumber: number, retryCoun
                 }
                 
                 await client.query('COMMIT');
-    } catch (error) {
+            } catch (error) {
                 await client.query('ROLLBACK');
                 throw error;
             }
@@ -1921,7 +1923,7 @@ export async function indexBlockFromGraphQL(block: BlocksSubscription['blocks'])
 /**
  * GraphQLを使用して最新のブロックを購読するモード（コンソール出力のみ）
  */
-export async function startWatchingGraphQL(): Promise<() => void> {
+export async function startWatchingGraphQL(): Promise<void> {
     if (isIndexing) {
         console.log('⚠️ Already indexing');
         throw new Error('Already indexing');
@@ -1931,53 +1933,77 @@ export async function startWatchingGraphQL(): Promise<() => void> {
     
     console.log('👀 Subscribing to new blocks via GraphQL...');
 
-    const { subscribeBlocksGraphQL, connectWallet, isRegularTransaction, isSystemTransaction } = await import('./midnight-indexer');
-    
-    const sessionId = await connectWallet('mn_addr_preview1p3qg7lwa673547xzny4nkn35pyw7y9gr7we2vxmj0lz5rjxkxf6q49juju');
-    console.log(`🔑 Session ID: ${sessionId}`);
-
-    const unsubscribe = subscribeBlocksGraphQL(async (block) => {
-        try {
-            console.log('\n' + '='.repeat(80));
-            console.log('📦 ブロック情報 (GraphQL)');
-            console.log('='.repeat(80));
-            console.log(`高さ:        ${block.height.toLocaleString()}`);
-            console.log(`ハッシュ:    ${block.hash}`);
-            console.log(`タイムスタンプ: ${new Date(block.timestamp * 1000).toISOString()} (${block.timestamp})`);
-            console.log(`作成者:      ${block.author || 'N/A'}`);
-            console.log(`プロトコルバージョン: ${block.protocolVersion}`);
-            console.log(`レジャーパラメータ: ${block.ledgerParameters}`);
-            
-            if (block.parent) {
-                console.log(`親ブロック:  高さ ${block.parent.height.toLocaleString()}, ハッシュ ${block.parent.hash}`);
-            }
-            
-            console.log(`\nトランザクション数: ${block.transactions.length}`);
-            
-            if (block.transactions.length > 0) {
-                console.log('\n' + '-'.repeat(80));
-                console.log('トランザクション一覧');
-                console.log('-'.repeat(80));
-                
-                block.transactions.forEach((tx, index) => {
-                    console.log(`\n[${index + 1}] ${tx.__typename}`);
-                    console.log(`    ハッシュ: ${tx.hash}`);
-                    console.log(`    ブロック高さ: ${block.height.toLocaleString()}`);
-                    console.log(`    ID: ${tx.id}`);
-                });
-            }
-            
-            console.log('\n' + '='.repeat(80));
-        } catch (err) {
-            console.error(`[GraphQL Subscription] Error processing block ${block.height}:`, err);
-        }
+    subscribe(async (header: Header, api: ApiPromise) => {
+        console.log(`🔍 New block ${header.number.toNumber()}`);
+    }, async (header: Header, api: ApiPromise) => {
+        console.log(`🔍 Finalized block ${header.number.toNumber()}`);
     });
 
-    return () => {
-        unsubscribe();
-        isIndexing = false;
-        console.log('⏹️ Stopped GraphQL subscription');
-    };
+    // const { subscribeBlocks, getBlockByHeight, isRegularTransaction, isSystemTransaction } = await import('./midnight-indexer');
+    
+    // subscribeBlocks(async (header: Header) => {
+    //     try {
+    //         const height = header.number.toNumber();
+
+    //         console.log(`🔍 Processing block ${height}`);
+
+    //         // const block = await getBlockByHeight(height);
+    //         // if (!block) {
+    //         //     console.error(`Block not found for height ${height}`);
+    //         //     return;
+    //         // }
+
+    //         // console.log('\n' + '='.repeat(80));
+    //         // console.log('📦 ブロック情報 (GraphQL)');
+    //         // console.log('='.repeat(80));
+    //         // console.log(`高さ:        ${block.height.toLocaleString()}`);
+    //         // console.log(`ハッシュ:    ${block.hash}`);
+    //         // console.log(`タイムスタンプ: ${new Date(block.timestamp * 1000).toISOString()} (${block.timestamp})`);
+    //         // console.log(`作成者:      ${block.author || 'N/A'}`);
+    //         // console.log(`プロトコルバージョン: ${block.protocolVersion}`);
+    //         // console.log(`レジャーパラメータ: ${block.ledgerParameters}`);
+            
+    //         // if (block.parent) {
+    //         //     console.log(`親ブロック:  高さ ${block.parent.height.toLocaleString()}, ハッシュ ${block.parent.hash}`);
+    //         // }
+            
+    //         // console.log(`\nトランザクション数: ${block.transactions.length}`);
+            
+    //         // if (block.transactions.length > 0) {
+    //         //     console.log('\n' + '-'.repeat(80));
+    //         //     console.log('トランザクション一覧');
+    //         //     console.log('-'.repeat(80));
+                
+    //         //     block.transactions.forEach((tx, index) => {
+    //         //         console.log(`\n[${index + 1}] ${tx.__typename}`);
+    //         //         console.log(`    ハッシュ: ${tx.hash}`);
+    //         //         console.log(`    ブロック高さ: ${block.height.toLocaleString()}`);
+    //         //         console.log(`    ID: ${tx.id}`);
+    //         //     });
+    //         // }
+            
+    //         // console.log('\n' + '='.repeat(80));
+    //     } catch (err) {
+    //         console.error(`[GraphQL Subscription] Error processing block ${header.number.toNumber()}:`, err);
+    //     }
+    // });
+
+    // subscribeFinalizedBlocks(async (header: Header, api: ApiPromise) => {
+    //     const height = header.number.toNumber();
+    //     console.log(`🔍 Finalized block ${height}`);
+    // });
+
+    // subscribe(async (header: Header) => {
+    //     console.log(`🔍 New block ${header.number.toNumber()}`);
+
+    //     const block = await getBlockByHeight(header.number.toNumber());
+    //     if (!block) {
+    //         console.error(`Block not found for height ${header.number.toNumber()}`);
+    //         return;
+    //     }
+
+    //     console.log(block.height);
+    // });
 }
 
 export function stopIndexing(): void {

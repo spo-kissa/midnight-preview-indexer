@@ -1,27 +1,34 @@
-import { request, gql } from 'graphql-request';
-import { createClient } from 'graphql-ws';
-import WebSocket from 'ws';
+import { request } from 'graphql-request';
+import { bech32m } from 'bech32';
+import { ApiPromise, WsProvider } from '@polkadot/api';
+import type { ProviderInterface } from '@polkadot/rpc-provider/types';
+import type { SignedBlock, Header, BlockHash } from '@polkadot/types/interfaces';
 import type {
     GetBlockByHeightQuery,
     GetBlockByHeightQueryVariables,
     SystemTransaction,
     RegularTransaction,
-    BlocksSubscriptionVariables,
-    BlocksSubscription,
     ConnectWalletMutationVariables,
     ConnectWalletMutation,
     DisconnectWalletMutationVariables,
-    DisconnectWalletMutation
+    DisconnectWalletMutation,
+    UnshieldedUtxo,
+    DustGenerationDtimeUpdate,
+    DustInitialUtxo,
+    DustSpendProcessed,
+    ParamChange,
 } from './graphql/generated';
 import {
     GetBlockByHeightDocument,
-    BlocksDocument,
     ConnectWalletDocument,
     DisconnectWalletDocument
 } from './graphql/generated';
-import { print } from 'graphql';
+import { Block, BlockRaw, Extrinsic } from 'types/chain';
 
 const MIDNIGHT_GRAPHQL_URL = process.env.MIDNIGHT_GRAPHQL_URL || 'https://indexer.preview.midnight.network/api/v3/graphql';
+
+let api: ApiPromise | null = null;
+
 // WebSocketエンドポイント: 環境変数が指定されていない場合は、複数の候補を試す
 function getWebSocketUrl(): string {
     if (process.env.MIDNIGHT_GRAPHQL_WS_URL) {
@@ -30,7 +37,7 @@ function getWebSocketUrl(): string {
     
     // HTTPエンドポイントと同じパスを使用（多くのGraphQLサーバーでこれが標準）
     // const baseUrl = MIDNIGHT_GRAPHQL_URL.replace(/^https?:\/\//, 'wss://').replace(/^http:\/\//, 'ws://') + '/ws';
-    return 'wss://indexer.preview.midnight.network/api/v3/graphql'; //baseUrl;
+    return 'wss://rpc.preview.midnight.network'; //baseUrl;
 }
 
 const MIDNIGHT_GRAPHQL_WS_URL = getWebSocketUrl();
@@ -56,96 +63,8 @@ export async function getBlockByHeight(
 
 
 /**
- * ブロックを購読します（GraphQL WebSocketサブスクリプション）。
- * @param onBlock ブロックが受信されたときに呼び出されるコールバック関数
- * @returns サブスクリプションを停止する関数
- */
-export function subscribeBlocksGraphQL(
-    onBlock: (block: BlocksSubscription['blocks']) => void | Promise<void>
-): () => void {
-    console.log(`[GraphQL Subscription] Connecting to WebSocket: ${MIDNIGHT_GRAPHQL_WS_URL}`);
-    console.log(`[GraphQL Subscription] Note: If you get a 503 error, the WebSocket endpoint might be different.`);
-    console.log(`[GraphQL Subscription] Try setting MIDNIGHT_GRAPHQL_WS_URL environment variable to:`);
-    console.log(`[GraphQL Subscription]   - wss://indexer.preview.midnight.network/api/v3/graphql (same as HTTP)`);
-    console.log(`[GraphQL Subscription]   - wss://indexer.preview.midnight.network/api/v3/graphql/ws`);
-    console.log(`[GraphQL Subscription]   - wss://indexer.preview.midnight.network/api/v3/graphql/subscriptions`);
-    
-    const client = createClient({
-        url: MIDNIGHT_GRAPHQL_WS_URL,
-        webSocketImpl: WebSocket,
-        connectionParams: {},
-        shouldRetry: () => true,
-        retryAttempts: Infinity,
-        retryWait: async (retries: number) => {
-            // 指数バックオフでリトライ: 1秒、2秒、4秒、8秒、16秒...
-            const delay = Math.min(1000 * Math.pow(2, retries - 1), 30000); // 最大30秒
-            await new Promise(resolve => setTimeout(resolve, delay));
-        },
-        on: {
-            opened: () => {
-                console.log('[GraphQL Subscription] ✅ WebSocket connection opened');
-            },
-            closed: () => {
-                console.log('[GraphQL Subscription] ❌ WebSocket connection closed');
-            },
-            error: (err) => {
-                console.error('[GraphQL Subscription] ❌ WebSocket connection error:', err);
-            },
-        },
-    });
-
-    let disposed = false;
-
-    const unsubscribe = client.subscribe<BlocksSubscription>(
-        {
-            query: print(BlocksDocument),
-            variables: {},
-        },
-        {
-            next: (data) => {
-                if (data.data?.blocks && !disposed) {
-                    onBlock(data.data.blocks);
-                }
-            },
-            error: (err: unknown) => {
-                if (!disposed) {
-                    // エラーの詳細を出力
-                    if (err instanceof Error) {
-                        console.error('[GraphQL Subscription] Error:', err.message);
-                        console.error('[GraphQL Subscription] Stack:', err.stack);
-                    } else if (err && typeof err === 'object' && 'message' in err) {
-                        const errorMessage = (err as { message: string }).message;
-                        console.error('[GraphQL Subscription] Error:', errorMessage);
-                        
-                        // 503エラーの場合は特別なメッセージを表示
-                        if (errorMessage.includes('503')) {
-                            console.error('[GraphQL Subscription] 💡 Tip: The WebSocket endpoint might be incorrect or the server might not support WebSocket subscriptions.');
-                            console.error('[GraphQL Subscription] 💡 Please check the Midnight GraphQL API documentation for the correct WebSocket endpoint URL.');
-                        }
-                    } else {
-                        console.error('[GraphQL Subscription] Error:', err);
-                    }
-                }
-            },
-            complete: () => {
-                if (!disposed) {
-                    console.log('[GraphQL Subscription] Completed');
-                }
-            },
-        }
-    );
-
-    // サブスクリプションを停止する関数を返す
-    return () => {
-        disposed = true;
-        unsubscribe(); // subscribe()は() => voidを返す
-        client.dispose();
-    };
-}
-
-
-/**
  * ウォレットを接続します。
+ * @deprecated 使用しないでください
  * @param viewingKey ウォレットのビューキー
  * @returns セッションID
  */
@@ -164,6 +83,7 @@ export async function connectWallet(
 
 /**
  * ウォレットを切断します。
+ * @deprecated 使用しないでください
  * @param sessionId セッションID
  * @returns 成功時はUint型が返されます
  */
@@ -195,4 +115,319 @@ export function isRegularTransaction(tx: any): tx is RegularTransaction {
  */
 export function isSystemTransaction(tx: any): tx is SystemTransaction {
     return '__typename' in tx && tx.__typename === 'SystemTransaction';
+}
+
+
+/**
+ * アンシールド出力かどうかを判定します。
+ * @param output アンシールド出力データ
+ * @returns アンシールド出力かどうか
+ */
+export function isUnshieldedOutput(output: any): output is UnshieldedUtxo {
+    return '__typename' in output && output.__typename === 'UnshieldedUtxo';
+}
+
+
+export function isDustGenerationDtimeUpdate(event: any): event is DustGenerationDtimeUpdate {
+    return '__typename' in event && event.__typename === 'DustGenerationDtimeUpdate';
+}
+
+export function isDustInitialUtxo(event: any): event is DustInitialUtxo {
+    return '__typename' in event && event.__typename === 'DustInitialUtxo';
+}
+
+export function isDustSpendProcessed(event: any): event is DustSpendProcessed {
+    return '__typename' in event && event.__typename === 'DustSpendProcessed';
+}
+
+export function isParamChange(event: any): event is ParamChange {
+    return '__typename' in event && event.__typename === 'ParamChange';
+}
+
+
+
+/**
+ * 16進数文字列を mn_addr_preview 形式 (Bech32m) にエンコードします。
+ * @param hexAddress 16進数エンコードされたアドレス (例: "0x1234...")
+ * @returns Bech32m エンコード形式のアドレス (例: "mn_addr_preview1...")
+ */
+export function encodeToMnAddrPreview(hexAddress: string): string {
+
+    // 0xプレフィックスを除去
+    const hex = hexAddress.startsWith('0x')
+        ? hexAddress.substring(2)
+        : hexAddress;
+    
+    // 16進数文字列をバイト配列に変換
+    const bytes = Buffer.from(hex, 'hex');
+
+    // Bech32m エンコード
+    // HRP: "mn_addr_preview" (プレビューネットワークのアンシールドアドレス)
+    return bech32m.encode('mn_addr_preview', bech32m.toWords(bytes));
+}
+
+/**
+ * mn_addr_preview 形式 (Bech32m) を 16進数文字列にデコードします。
+ * @param bech32Address Bech32m エンコード 形式のアドレス
+ * @param hexPrefix 16進数エンコードされたアドレスに0xプレフィックスを付与するかどうか
+ * @returns 16進数エンコードされたアドレス
+ */
+export function decodeFromMnAddrPreview(bech32Address: string, hexPrefix: boolean = true): string {
+    // Bech32m デコード
+    // HRP: "mn_addr_preview" (プレビューネットワークのアンシールドアドレス)
+    const { prefix, words } = bech32m.decode(bech32Address);
+
+    // アドレスプレフィックスが一致しない場合はエラー
+    if (prefix !== 'mn_addr_preview') {
+        throw new Error(`Invalid address prefix: expected 'mn_addr_preview' but got '${prefix}'`);
+    }
+
+    // バイト配列に変換
+    const bytes = Buffer.from(bech32m.fromWords(words));
+
+    // バイト配列を16進数文字列に変換
+    // 0xプレフィックスを付与 (hexPrefix = true の場合)
+    return hexPrefix ? '0x' + bytes.toString('hex') : bytes.toString('hex');
+}
+
+
+/**
+ * 16進数文字列を mn_addr 形式 (Bech32m) にエンコードします。
+ * @param hexAddress 16進数エンコードされたアドレス (例: "0x1234...")
+ * @param network ネットワーク (例: "preview", "test", "main")
+ * @returns Bech32m エンコード形式のアドレス (例: "mn_addr_preview1...")
+ */
+export function encodeToMnAddr(
+    hexAddress: string,
+    network: 'preview' | 'test' | 'main' = 'preview'
+): string {
+
+    const hex = hexAddress.startsWith('0x')
+        ? hexAddress.substring(2)
+        : hexAddress;
+
+    const bytes = Buffer.from(hex, 'hex');
+
+    const hrp = `mn_addr_${network}`;
+
+    return bech32m.encode(hrp, bech32m.toWords(bytes));
+}
+
+
+/**
+ * トークンタイプ
+ */
+export enum TOKEN_TYPE {
+    /**
+     * ナイトトークン
+     */
+    NIGHT = '0000000000000000000000000000000000000000000000000000000000000000',
+}
+
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// PolkaDots API
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * Midnight RPC に接続します。
+ * @returns ApiPromise 接続成功時はApiPromiseが返されます
+ */
+export async function connectToChain(): Promise<ApiPromise> {
+    if (api && api.isConnected) return api;
+
+    console.log('[midnight-indexer] 🔌 Connecting to Midnight RPC:', MIDNIGHT_GRAPHQL_WS_URL);
+
+    const provider = new WsProvider(MIDNIGHT_GRAPHQL_WS_URL);
+    api = await ApiPromise.create({
+        provider: provider as ProviderInterface,
+        noInitWarn: true,
+    });
+
+    const chain = await api.rpc.system.chain();
+    const nodeName = await api.rpc.system.name();
+    const nodeVersion = await api.rpc.system.version();
+
+    console.log(`[midnight-indexer] ✅ Connected to ${chain} via ${nodeName} v${nodeVersion}`)
+
+    return api;
+}
+
+/**
+ * 新しいブロックを購読します。
+ * @param onBlock 新しいブロックが受信されたときに呼び出されるコールバック関数
+ */
+export async function subscribeBlocks(
+    onBlock: (header: Header, api: ApiPromise) => void | Promise<void>
+): Promise<void> {
+
+    console.log(`[midnight-indexer] 🔌 Subscribing to blocks...`);
+
+    const api = await connectToChain();
+    await api.rpc.chain.subscribeNewHeads(async (header) => {
+        await onBlock(header, api);
+    });
+}
+
+/**
+ * ファイナライズされたブロックを購読します。
+ * @param onFinalizedBlock ファイナライズされたブロックが受信されたときに呼び出されるコールバック関数
+ */
+export async function subscribeFinalizedBlocks(
+    onFinalizedBlock: (header: Header, api: ApiPromise) => void | Promise<void>
+): Promise<void>
+{
+    console.log(`[midnight-indexer] 🔌 Subscribing to finalized blocks...`);
+
+    const api = await connectToChain();
+    await api.rpc.chain.subscribeFinalizedHeads(async (header) => {
+        await onFinalizedBlock(header, api);
+    });
+}
+
+/**
+ * すべてのブロックを購読します。
+ * @param onBlock 新しいブロックが受信されたときに呼び出されるコールバック関数
+ */
+export async function subscribe(
+    onBlock: (header: Header, api: ApiPromise) => void | Promise<void>,
+    onFinalizedBlock: (header: Header, api: ApiPromise) => void | Promise<void>
+): Promise<void>
+{
+    console.log(`[midnight-indexer] 🔌 Subscribing to blocks...`);
+    const api = await connectToChain();
+
+    await api.rpc.chain.subscribeNewHeads(async (header) => {
+        await onBlock(header, api);
+    });
+
+    await api.rpc.chain.subscribeFinalizedHeads(async (header) => {
+        await onFinalizedBlock(header, api);
+    });
+}
+
+/**
+ * ブロック高を取得します。
+ * @param header ブロック高を取得したいヘッダー
+ * @returns ブロック高
+ */
+export function getBlockHeight(header: Header): number {
+    return header.number.toNumber();
+}
+
+/**
+ * ブロックハッシュを取得します。
+ * @param height ブロック高
+ * @returns ブロックハッシュ
+ */
+export async function getBlockHashFromHeight(height: number): Promise<BlockHash> {
+    if (!api || !api.isConnected) {
+        api =await connectToChain();
+    }
+    return await api.rpc.chain.getBlockHash(height);
+}
+
+/**
+ * ブロックハッシュからブロックを取得します。
+ * @param hash ブロックハッシュ
+ * @returns ブロック
+ */
+export async function getBlockFromHash(hash: BlockHash): Promise<SignedBlock> {
+    if (!api || !api.isConnected) {
+        api =await connectToChain();
+    }
+    return await api.rpc.chain.getBlock(hash);
+}
+
+/**
+ * ブロックハッシュからタイムスタンプを取得します。
+ * @param hash ブロックハッシュ
+ * @returns タイムスタンプ
+ */
+export async function blockHashToTimestamp(hash: BlockHash): Promise<number> {
+    if (!api || !api.isConnected) {
+        api =await connectToChain();
+    }
+    return await api.query.timestamp.now.at(hash);
+}
+
+/**
+ * ブロックヘッダーからブロックデータを取得します。
+ * @param header ブロックヘッダー
+ * @returns ブロックデータ
+ */
+export async function getBlockData(header: Header): Promise<Block> {
+    if (!api || !api.isConnected) {
+        api =await connectToChain();
+    }
+
+    const hash = await getBlockHashFromHeight(header.number.toNumber());
+
+    const block = await getBlockFromHash(hash);
+
+    const extrinsics = await Promise.all(block.block.extrinsics.map<Promise<Extrinsic>>(async(extrinsic, index) => {
+        const method = extrinsic.method;
+        const timestamp = await blockHashToTimestamp(extrinsic.hash);
+        return {
+            index: index,
+            blockHeight: header.number.toNumber(),
+            blockHash: hash.toString().substring(2).toLowerCase(),
+            indexInBlock: index,
+            hash: extrinsic.hash.toString().substring(2).toLowerCase(),
+            section: extrinsic.method.section,
+            method: {
+                section: method.section,
+                method: method.method,
+                args: method.args.map((args: any) => {
+                    try {
+                        return args.ToHuman ? args.ToHuman() : args.toString();
+                    } catch {
+                        return args.toString();
+                    }
+                }),
+            },
+            signer: extrinsic.signer ? extrinsic.signer.toString() : null,
+            signature: extrinsic.signature ? extrinsic.signature.toString() : null,
+            era: extrinsic.era ? extrinsic.era.toString() : null,
+            nonce: extrinsic.nonce ? extrinsic.nonce.toString() : null,
+            tip: extrinsic.tip ? extrinsic.tip.toString() : null,
+            isSigned: extrinsic.isSigned,
+            length: extrinsic.length,
+            data: Buffer.from(extrinsic.data).toString('hex'),
+            timestamp: timestamp,
+        };
+    }));
+
+    return {
+        hash: header.hash.toString().substring(2).toLowerCase(),
+        height: header.number.toNumber(),
+        parentHash: header.parentHash.toString().substring(2).toLowerCase(),
+        stateRoot: header.stateRoot.toString().substring(2).toLowerCase(),
+        timestamp: await blockHashToTimestamp(hash),
+        isFinalized: false,
+        extrinsics: extrinsics,
+        raw: {
+            blockHash: block.block.hash.toString().substring(2).toLowerCase(),
+            blockNumber: header.number.toNumber(),
+            timestamp: await blockHashToTimestamp(hash),
+            header: {
+                header: header.toString(),
+                number: header.number.toString(),
+                parentHash: header.parentHash.toString().substring(2).toLowerCase(),
+                stateRoot: header.stateRoot.toString().substring(2).toLowerCase(),
+                extrinsicsRoot: header.extrinsicsRoot.toString().substring(2).toLowerCase(),
+                digest: header.digest.toString(),
+                encodedLength: header.encodedLength,
+                isEmpty: header.isEmpty,
+                registry: (header.registry as any).chainSS58 || null,
+            },
+            extrinsicsCount: extrinsics.length,
+            events: [],
+            eventsCount: 0,
+            justifications: null,
+            encodedLength: block.block.encodedLength,
+            isEmpty: block.block.isEmpty,
+        },
+    };
 }

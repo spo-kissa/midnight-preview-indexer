@@ -299,83 +299,83 @@ export async function backfillExtrinsicHashes(): Promise<void> {
     });
 }
 
-export async function insertBlock(block: Block): Promise<void> {
-    await pool?.query(`INSERT INTO blocks
-        (hash, height, parent_hash, slot, timestamp, tx_count, state_root, is_finalized, raw)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-        ON CONFLICT (height) DO UPDATE SET
-          hash = EXCLUDED.hash,
-          parent_hash = EXCLUDED.parent_hash,
-          slot = EXCLUDED.slot,
-          timestamp = EXCLUDED.timestamp,
-          tx_count = EXCLUDED.tx_count,
-          state_root = EXCLUDED.state_root,
-          is_finalized = EXCLUDED.is_finalized,
-          raw = EXCLUDED.raw`,
-        [
-          block.hash,
-          block.height,
-          block.parent_hash,
-          block.height, // slotはheightと同じ値を使用（Midnightの仕様に合わせて調整可能）
-          new Date(block.timestamp * 1000),
-          block.extrinsics_count,
-          block.state_root || null,
-          false, // is_finalizedは後で更新
-          block.raw || {} // blockから取得したrawデータ、なければ空オブジェクト
-        ]
-    );
-}
+// export async function insertBlock(block: Block): Promise<void> {
+//     await pool?.query(`INSERT INTO blocks
+//         (hash, height, parent_hash, slot, timestamp, tx_count, state_root, is_finalized, raw)
+//         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+//         ON CONFLICT (height) DO UPDATE SET
+//           hash = EXCLUDED.hash,
+//           parent_hash = EXCLUDED.parent_hash,
+//           slot = EXCLUDED.slot,
+//           timestamp = EXCLUDED.timestamp,
+//           tx_count = EXCLUDED.tx_count,
+//           state_root = EXCLUDED.state_root,
+//           is_finalized = EXCLUDED.is_finalized,
+//           raw = EXCLUDED.raw`,
+//         [
+//           block.hash,
+//           block.height,
+//           block.parent_hash,
+//           block.height, // slotはheightと同じ値を使用（Midnightの仕様に合わせて調整可能）
+//           new Date(block.timestamp * 1000),
+//           block.extrinsics_count,
+//           block.state_root || null,
+//           false, // is_finalizedは後で更新
+//           block.raw || {} // blockから取得したrawデータ、なければ空オブジェクト
+//         ]
+//     );
+// }
 
-export async function insertExtrinsic(extrinsic: Extrinsic & { signer?: string | null; raw?: any }): Promise<number> {
-    // blocksテーブルからblock_idを取得
-    const blockResult = await pool?.query<{ id: number }>(
-      `SELECT id FROM blocks WHERE height = $1`,
-      [extrinsic.block_height]
-    );
-    const blockId = blockResult?.rows[0]?.id;
+// export async function insertExtrinsic(extrinsic: Extrinsic & { signer?: string | null; raw?: any }): Promise<number> {
+//     // blocksテーブルからblock_idを取得
+//     const blockResult = await pool?.query<{ id: number }>(
+//       `SELECT id FROM blocks WHERE height = $1`,
+//       [extrinsic.blockHeight]
+//     );
+//     const blockId = blockResult?.rows[0]?.id;
     
-    if (!blockId) {
-      throw new Error(`Block with height ${extrinsic.block_height} not found`);
-    }
+//     if (!blockId) {
+//       throw new Error(`Block with height ${extrinsic.blockHeight} not found`);
+//     }
 
-    // argsが既にJSON文字列の場合はパース、そうでなければそのまま使用
-    let argsJson: any;
-    try {
-      argsJson = typeof extrinsic.args === 'string' ? JSON.parse(extrinsic.args) : extrinsic.args;
-    } catch {
-      argsJson = extrinsic.args;
-    }
+//     // argsが既にJSON文字列の場合はパース、そうでなければそのまま使用
+//     let argsJson: any;
+//     try {
+//       argsJson = typeof extrinsic.args === 'string' ? JSON.parse(extrinsic.args) : extrinsic.args;
+//     } catch {
+//       argsJson = extrinsic.args;
+//     }
 
-    const result = await pool?.query<{ id: number }>(`
-      INSERT INTO extrinsics
-        (block_id, index_in_block, section, method, signer, args, raw)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        ON CONFLICT (block_id, index_in_block) DO UPDATE SET
-          section = EXCLUDED.section,
-          method = EXCLUDED.method,
-          signer = EXCLUDED.signer,
-          args = EXCLUDED.args,
-          raw = EXCLUDED.raw
-        RETURNING id
-    `, [
-          blockId,
-          extrinsic.index_in_block,
-          extrinsic.section,
-          extrinsic.method,
-          extrinsic.signer || null,
-          argsJson,
-          extrinsic.raw || { 
-            hash: extrinsic.hash, 
-            block_hash: extrinsic.block_hash,
-            data: extrinsic.data, 
-            success: extrinsic.success,
-            timestamp: extrinsic.timestamp
-          }
-        ]
-    );
+//     const result = await pool?.query<{ id: number }>(`
+//       INSERT INTO extrinsics
+//         (block_id, index_in_block, section, method, signer, args, raw)
+//         VALUES ($1, $2, $3, $4, $5, $6, $7)
+//         ON CONFLICT (block_id, index_in_block) DO UPDATE SET
+//           section = EXCLUDED.section,
+//           method = EXCLUDED.method,
+//           signer = EXCLUDED.signer,
+//           args = EXCLUDED.args,
+//           raw = EXCLUDED.raw
+//         RETURNING id
+//     `, [
+//           blockId,
+//           extrinsic.index_in_block,
+//           extrinsic.section,
+//           extrinsic.method,
+//           extrinsic.signer || null,
+//           argsJson,
+//           extrinsic.raw || { 
+//             hash: extrinsic.hash, 
+//             block_hash: extrinsic.block_hash,
+//             data: extrinsic.data, 
+//             success: extrinsic.success,
+//             timestamp: extrinsic.timestamp
+//           }
+//         ]
+//     );
     
-    return result?.rows[0]?.id || 0;
-}
+//     return result?.rows[0]?.id || 0;
+// }
 
 /**
  * イベントをeventsテーブルに保存

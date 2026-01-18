@@ -1,131 +1,131 @@
 query GetBlockByHeight($height: Int!) {
   block(offset: { height: $height }) {
-    hash,
-    height,
-    protocolVersion,
-    timestamp,
-    author,
+    hash
+    height
+    protocolVersion
+    timestamp
+    author
     parent {
-      height,
+      height
       hash
-    },
+    }
     transactions {
       __typename
-      id,
-      hash,
-      protocolVersion,
-      raw,
+      id
+      hash
+      protocolVersion
+      raw
       block {
-        height,
-        hash,
-        protocolVersion,
-        timestamp,
-        author,
+        height
+        hash
+        protocolVersion
+        timestamp
+        author
         ledgerParameters
-      },
+      }
       contractActions {
         __typename
-        address,
-        state,
+        address
+        state
         transaction {
-          id,
+          id
           hash
-        },
+        }
         unshieldedBalances {
-          amount,
+          amount
           tokenType
-        },
-        zswapState,
+        }
+        zswapState
         ...on ContractCall {
-          entryPoint,
+          entryPoint
           deploy {
-            address,
-            state,
+            address
+            state
             transaction {
-              id,
+              id
               hash
-            },
+            }
             unshieldedBalances {
-              amount,
+              amount
               tokenType
-            },
+            }
             zswapState
           }
         }
-      },
+      }
       unshieldedCreatedOutputs {
         __typename
         createdAtTransaction {
-          id,
+          id
           hash
-        },
-        ctime,
-        initialNonce,
-        intentHash,
-        outputIndex,
-        owner,
-        registeredForDustGeneration,
+        }
+        ctime
+        initialNonce
+        intentHash
+        outputIndex
+        owner
+        registeredForDustGeneration
         spentAtTransaction {
-          id,
+          id
           hash
-        },
-        tokenType,
+        }
+        tokenType
         value
-      },
+      }
       unshieldedSpentOutputs {
         __typename
         createdAtTransaction {
-          id,
+          id
           hash
-        },
-        ctime,
-        initialNonce,
-        intentHash,
-        outputIndex,
-        owner,
-        registeredForDustGeneration,
+        }
+        ctime
+        initialNonce
+        intentHash
+        outputIndex
+        owner
+        registeredForDustGeneration
         spentAtTransaction {
-          id,
+          id
           hash
-        },
-        tokenType,
+        }
+        tokenType
         value
-      },
+      }
       zswapLedgerEvents {
         __typename
-        id,
-        maxId,
+        id
+        maxId
         raw
-      },
+      }
       dustLedgerEvents {
         __typename
-        id,
-        raw,
-        maxId,
+        id
+        raw
+        maxId
         ...on DustInitialUtxo {
           output {
             nonce
           }
         }
-      },
+      }
       ...on RegularTransaction {
         transactionResult {
-          status,
+          status
           segments {
-            id,
+            id
             success
           }
-        },
-        identifiers,
-        merkleTreeRoot,
-        startIndex,
-        endIndex,
+        }
+        identifiers
+        merkleTreeRoot
+        startIndex
+        endIndex
         fees {
-          paidFees,
+          paidFees
           estimatedFees
         }
       }
-    },
+    }
     ledgerParameters
   }
 }
