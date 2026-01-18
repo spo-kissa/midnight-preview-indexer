@@ -4,6 +4,7 @@
   "main": "index.js",
   "scripts": {
     "dev": "npx ts-node index.ts",
+    "codegen": "npx graphql-codegen",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "migrate": "ts-node --transpile-only --compiler-options '{\"module\":\"commonjs\"}' migrate.ts",
@@ -14,6 +15,10 @@
   "license": "MIT",
   "description": "",
   "devDependencies": {
+    "@graphql-codegen/cli": "^6.1.1",
+    "@graphql-codegen/typed-document-node": "^6.1.5",
+    "@graphql-codegen/typescript": "^5.0.7",
+    "@graphql-codegen/typescript-operations": "^5.0.7",
     "@types/node": "^25.0.3",
     "@types/pg": "^8.10.9",
     "ts-node": "^10.9.2",
@@ -22,7 +27,10 @@
   "dependencies": {
     "@polkadot/api": "^16.5.4",
     "dotenv": "^17.2.3",
-    "npm": "^11.7.0",
-    "pg": "^8.12.0"
+    "graphql": "^16.12.0",
+    "graphql-request": "^7.4.0",
+    "graphql-ws": "^6.0.6",
+    "pg": "^8.12.0",
+    "ws": "^8.18.0"
   }
 }

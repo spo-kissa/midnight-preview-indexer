@@ -1,0 +1,9 @@
+# ウォレット接続（セッションID取得）
+mutation ConnectWallet($viewingKey: ViewingKey!) {
+  connect(viewingKey: $viewingKey)
+}
+
+# ウォレット切断
+mutation DisconnectWallet($sessionId: HexEncoded!) {
+  disconnect(sessionId: $sessionId)
+}

@@ -1,0 +1,131 @@
+query GetBlockByHeight($height: Int!) {
+  block(offset: { height: $height }) {
+    hash,
+    height,
+    protocolVersion,
+    timestamp,
+    author,
+    parent {
+      height,
+      hash
+    },
+    transactions {
+      __typename
+      id,
+      hash,
+      protocolVersion,
+      raw,
+      block {
+        height,
+        hash,
+        protocolVersion,
+        timestamp,
+        author,
+        ledgerParameters
+      },
+      contractActions {
+        __typename
+        address,
+        state,
+        transaction {
+          id,
+          hash
+        },
+        unshieldedBalances {
+          amount,
+          tokenType
+        },
+        zswapState,
+        ...on ContractCall {
+          entryPoint,
+          deploy {
+            address,
+            state,
+            transaction {
+              id,
+              hash
+            },
+            unshieldedBalances {
+              amount,
+              tokenType
+            },
+            zswapState
+          }
+        }
+      },
+      unshieldedCreatedOutputs {
+        __typename
+        createdAtTransaction {
+          id,
+          hash
+        },
+        ctime,
+        initialNonce,
+        intentHash,
+        outputIndex,
+        owner,
+        registeredForDustGeneration,
+        spentAtTransaction {
+          id,
+          hash
+        },
+        tokenType,
+        value
+      },
+      unshieldedSpentOutputs {
+        __typename
+        createdAtTransaction {
+          id,
+          hash
+        },
+        ctime,
+        initialNonce,
+        intentHash,
+        outputIndex,
+        owner,
+        registeredForDustGeneration,
+        spentAtTransaction {
+          id,
+          hash
+        },
+        tokenType,
+        value
+      },
+      zswapLedgerEvents {
+        __typename
+        id,
+        maxId,
+        raw
+      },
+      dustLedgerEvents {
+        __typename
+        id,
+        raw,
+        maxId,
+        ...on DustInitialUtxo {
+          output {
+            nonce
+          }
+        }
+      },
+      ...on RegularTransaction {
+        transactionResult {
+          status,
+          segments {
+            id,
+            success
+          }
+        },
+        identifiers,
+        merkleTreeRoot,
+        startIndex,
+        endIndex,
+        fees {
+          paidFees,
+          estimatedFees
+        }
+      }
+    },
+    ledgerParameters
+  }
+}
