@@ -293,6 +293,56 @@ async function main() {
       return;
     }
     
+    // Polkadot APIから最新のブロック高を表示するモード
+    if (command === '--latest' || command === 'latest' || command === '--current' || command === 'current') {
+      console.log('📊 Polkadot APIから最新のブロック高を取得します...');
+      
+      try {
+        const api = await connectToChain();
+        
+        // 最新のブロック高を取得
+        const latestHeader = await api.rpc.chain.getHeader();
+        const latestBlockHeight = latestHeader.number.toNumber();
+        const latestBlockHash = latestHeader.hash.toString();
+        
+        // ファイナライズされたブロック高を取得
+        let finalizedBlockHeight: number | undefined;
+        let finalizedBlockHash: string | undefined;
+        try {
+          const finalizedHash = await api.rpc.chain.getFinalizedHead();
+          const finalizedHeader = await api.rpc.chain.getHeader(finalizedHash);
+          finalizedBlockHeight = finalizedHeader.number.toNumber();
+          finalizedBlockHash = finalizedHash.toString();
+        } catch (err) {
+          console.warn(`⚠️  ファイナライズされたブロック高の取得に失敗しました:`, err);
+        }
+        
+        console.log('\n' + '='.repeat(80));
+        console.log('📦 最新のブロック情報');
+        console.log('='.repeat(80));
+        console.log(`最新のブロック高: ${latestBlockHeight.toLocaleString()}`);
+        console.log(`最新のブロックハッシュ: ${latestBlockHash}`);
+        
+        if (finalizedBlockHeight !== undefined) {
+          console.log(`ファイナライズされたブロック高: ${finalizedBlockHeight.toLocaleString()}`);
+          console.log(`ファイナライズされたブロックハッシュ: ${finalizedBlockHash}`);
+          const gap = latestBlockHeight - finalizedBlockHeight;
+          console.log(`未ファイナライズのブロック数: ${gap.toLocaleString()}`);
+        }
+        
+        console.log('='.repeat(80));
+        
+        // API接続を切断
+        await api.disconnect();
+        
+        process.exit(0);
+      } catch (err) {
+        console.error('[indexer] fatal error', err);
+        process.exit(1);
+      }
+      return;
+    }
+    
     // 特定のブロック番号を指定した場合
     const blockNumber = parseInt(args[0], 10);
     
@@ -306,6 +356,7 @@ async function main() {
       console.error('  npm run dev --migrate          # データベースマイグレーションを実行');
       console.error('  npm run dev --show <高さ>      # 指定された高さのブロックを表示');
       console.error('  npm run dev --watch-graphql    # GraphQLを使用して最新のブロックを購読');
+      console.error('  npm run dev --latest           # Polkadot APIから最新のブロック高を表示');
       process.exit(1);
     }
     
