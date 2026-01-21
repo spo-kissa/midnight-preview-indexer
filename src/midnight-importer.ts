@@ -117,6 +117,8 @@ export async function startImporting(startHeight: number = 0, batchSize: number 
     console.log(`\n✅ インポートが完了しました！`);
     console.log(`📊 総処理時間: ${totalMinutes}分${totalSeconds}秒`);
     console.log(`⚡ 平均速度: ${averageSpeed.toFixed(2)} ブロック/秒`);
+
+    await startMidnightIndex();
 }
 
 
