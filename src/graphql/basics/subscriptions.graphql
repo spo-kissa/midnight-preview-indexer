@@ -1,0 +1,63 @@
+
+subscription Blocks {
+  blocks {
+    height
+    hash
+    protocolVersion
+    timestamp
+    author
+    parent {
+      height
+      hash
+    },
+    transactions {
+      __typename
+      id
+      hash
+    },
+    ledgerParameters
+  }
+}
+
+
+subscription BlocksFromHeight($height: Int!) {
+  blocks(offset: { height: $height }) {
+    height
+    hash
+    protocolVersion
+    timestamp
+    author
+    parent {
+      height
+      hash
+    },
+    transactions {
+      __typename
+      id
+      hash
+    },
+    ledgerParameters
+  }
+}
+
+
+subscription BlocksFromHash($hash: HexEncoded!) {
+  blocks(offset: { hash: $hash }) {
+    height
+    hash
+    protocolVersion
+    timestamp
+    author
+    parent {
+      height
+      hash
+    },
+    transactions {
+      __typename
+      id
+      hash
+    },
+    ledgerParameters
+  }
+}
+

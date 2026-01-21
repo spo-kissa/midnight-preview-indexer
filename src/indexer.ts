@@ -2,6 +2,9 @@ import 'dotenv/config';
 import { ApiPromise, WsProvider } from "@polkadot/api";
 import type { ProviderInterface } from "@polkadot/rpc-provider/types";
 import { connectPostgres, getLastBlockNumber, getState, initializeDatabase, setState, withPgClient } from "./database";
+import type { BlocksSubscription } from "./graphql/generated";
+import type { SignedBlock, Header } from "@polkadot/types/interfaces";
+import { subscribe } from './midnight-indexer';
 
 const WS_RPC_ENDPOINT = process.env.MIDNIGHT_WS_ENDPOINT || 'wss://rpc.preview.midnight.network';
 const BATCH_SIZE = 2;
@@ -25,7 +28,7 @@ export async function connectToChain(): Promise<ApiPromise> {
     const nodeVersion = await api.rpc.system.version();
 
     console.log(`[indexer] ✅ Connected to ${chain} via ${nodeName} v${nodeVersion}`)
-    
+
     return api;
 }
 
@@ -161,7 +164,7 @@ export async function indexBlock(api: ApiPromise, blockNumber: number, retryCoun
                     blockHash.toString().substring(2).toLowerCase(),
                     blockNumber,
                     header.parentHash.toString().substring(2).toLowerCase(),
-                    blockNumber, // slotはheightと同じ値
+                    blockNumber,
                     toDate(timestamp),
                     block.extrinsics.length,
                     stateRoot.substring(2).toLowerCase(),
@@ -1435,7 +1438,7 @@ export async function indexBlock(api: ApiPromise, blockNumber: number, retryCoun
                 }
                 
                 await client.query('COMMIT');
-    } catch (error) {
+            } catch (error) {
                 await client.query('ROLLBACK');
                 throw error;
             }
@@ -1795,6 +1798,212 @@ export async function startIndexing(): Promise<void> {
             lastFinalizedUpdateBlock = blockNumber;
         }
     });
+}
+
+/**
+ * GraphQLから取得したブロックデータをデータベースに保存します
+ * @param block GraphQLから取得したブロックデータ
+ * @returns 保存されたトランザクション数
+ */
+export async function indexBlockFromGraphQL(block: BlocksSubscription['blocks']): Promise<number> {
+    // ハッシュから'0x'プレフィックスを除去して小文字に変換
+    const blockHash = block.hash.toString().startsWith('0x') 
+        ? block.hash.toString().substring(2).toLowerCase() 
+        : block.hash.toString().toLowerCase();
+    
+    const parentHash = block.parent?.hash 
+        ? (block.parent.hash.toString().startsWith('0x') 
+            ? block.parent.hash.toString().substring(2).toLowerCase() 
+            : block.parent.hash.toString().toLowerCase())
+        : '';
+
+    const rawData = {
+        height: block.height,
+        hash: block.hash,
+        protocolVersion: block.protocolVersion,
+        timestamp: block.timestamp,
+        author: block.author,
+        parent: block.parent,
+        transactions: block.transactions,
+        ledgerParameters: block.ledgerParameters,
+        source: 'graphql'
+    };
+
+    let blockId: number | null = null;
+    const txCount = block.transactions.length;
+
+    await withPgClient(async (client) => {
+        await client.query('BEGIN');
+        
+        try {
+            // 1. Blockを保存
+            await client.query(`
+                INSERT INTO blocks
+                    (hash, height, parent_hash, slot, timestamp, tx_count, state_root, is_finalized, raw)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    ON CONFLICT (height) DO UPDATE SET
+                        hash = EXCLUDED.hash,
+                        parent_hash = EXCLUDED.parent_hash,
+                        slot = EXCLUDED.slot,
+                        timestamp = EXCLUDED.timestamp,
+                        tx_count = EXCLUDED.tx_count,
+                        state_root = EXCLUDED.state_root,
+                        is_finalized = EXCLUDED.is_finalized,
+                        raw = EXCLUDED.raw
+            `, [
+                blockHash,
+                block.height,
+                parentHash || null,
+                block.height, // slotはheightと同じ値
+                new Date(block.timestamp * 1000),
+                txCount,
+                null, // GraphQLからはstate_rootが取得できない
+                false, // ファイナライズ状態は後で更新
+                rawData
+            ]);
+
+            // 2. Block IDを取得
+            const blockResult = await client.query<{ id: number }>(
+                `SELECT id FROM blocks WHERE height = $1`,
+                [block.height]
+            );
+            blockId = blockResult.rows[0]?.id;
+            
+            if (!blockId) {
+                throw new Error(`Failed to get block ID for height ${block.height}`);
+            }
+
+            // 3. Transactionsを保存（GraphQLからは基本的な情報のみ）
+            for (let i = 0; i < block.transactions.length; i++) {
+                const tx = block.transactions[i];
+                const txHash = tx.hash.toString().startsWith('0x')
+                    ? tx.hash.toString().substring(2).toLowerCase()
+                    : tx.hash.toString().toLowerCase();
+
+                const txRawData = {
+                    id: tx.id,
+                    hash: tx.hash,
+                    __typename: tx.__typename,
+                    source: 'graphql'
+                };
+
+                await client.query(`
+                    INSERT INTO transactions
+                        (hash, block_id, index_in_block, timestamp, is_shielded, fee, total_input, total_output, status, raw)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                        ON CONFLICT (hash) DO UPDATE SET
+                            block_id = EXCLUDED.block_id,
+                            index_in_block = EXCLUDED.index_in_block,
+                            timestamp = EXCLUDED.timestamp,
+                            raw = EXCLUDED.raw
+                `, [
+                    txHash,
+                    blockId,
+                    i,
+                    new Date(block.timestamp * 1000),
+                    false, // GraphQLからは判定できない
+                    null,
+                    null,
+                    null,
+                    1, // committed
+                    txRawData
+                ]);
+            }
+
+            await client.query('COMMIT');
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        }
+    });
+
+    return txCount;
+}
+
+/**
+ * GraphQLを使用して最新のブロックを購読するモード（コンソール出力のみ）
+ */
+export async function startWatchingGraphQL(): Promise<void> {
+    if (isIndexing) {
+        console.log('⚠️ Already indexing');
+        throw new Error('Already indexing');
+    }
+
+    isIndexing = true;
+    
+    console.log('👀 Subscribing to new blocks via GraphQL...');
+
+    subscribe(async (header: Header, api: ApiPromise) => {
+        console.log(`🔍 New block ${header.number.toNumber()}`);
+    }, async (header: Header, api: ApiPromise) => {
+        console.log(`🔍 Finalized block ${header.number.toNumber()}`);
+    });
+
+    // const { subscribeBlocks, getBlockByHeight, isRegularTransaction, isSystemTransaction } = await import('./midnight-indexer');
+    
+    // subscribeBlocks(async (header: Header) => {
+    //     try {
+    //         const height = header.number.toNumber();
+
+    //         console.log(`🔍 Processing block ${height}`);
+
+    //         // const block = await getBlockByHeight(height);
+    //         // if (!block) {
+    //         //     console.error(`Block not found for height ${height}`);
+    //         //     return;
+    //         // }
+
+    //         // console.log('\n' + '='.repeat(80));
+    //         // console.log('📦 ブロック情報 (GraphQL)');
+    //         // console.log('='.repeat(80));
+    //         // console.log(`高さ:        ${block.height.toLocaleString()}`);
+    //         // console.log(`ハッシュ:    ${block.hash}`);
+    //         // console.log(`タイムスタンプ: ${new Date(block.timestamp * 1000).toISOString()} (${block.timestamp})`);
+    //         // console.log(`作成者:      ${block.author || 'N/A'}`);
+    //         // console.log(`プロトコルバージョン: ${block.protocolVersion}`);
+    //         // console.log(`レジャーパラメータ: ${block.ledgerParameters}`);
+            
+    //         // if (block.parent) {
+    //         //     console.log(`親ブロック:  高さ ${block.parent.height.toLocaleString()}, ハッシュ ${block.parent.hash}`);
+    //         // }
+            
+    //         // console.log(`\nトランザクション数: ${block.transactions.length}`);
+            
+    //         // if (block.transactions.length > 0) {
+    //         //     console.log('\n' + '-'.repeat(80));
+    //         //     console.log('トランザクション一覧');
+    //         //     console.log('-'.repeat(80));
+                
+    //         //     block.transactions.forEach((tx, index) => {
+    //         //         console.log(`\n[${index + 1}] ${tx.__typename}`);
+    //         //         console.log(`    ハッシュ: ${tx.hash}`);
+    //         //         console.log(`    ブロック高さ: ${block.height.toLocaleString()}`);
+    //         //         console.log(`    ID: ${tx.id}`);
+    //         //     });
+    //         // }
+            
+    //         // console.log('\n' + '='.repeat(80));
+    //     } catch (err) {
+    //         console.error(`[GraphQL Subscription] Error processing block ${header.number.toNumber()}:`, err);
+    //     }
+    // });
+
+    // subscribeFinalizedBlocks(async (header: Header, api: ApiPromise) => {
+    //     const height = header.number.toNumber();
+    //     console.log(`🔍 Finalized block ${height}`);
+    // });
+
+    // subscribe(async (header: Header) => {
+    //     console.log(`🔍 New block ${header.number.toNumber()}`);
+
+    //     const block = await getBlockByHeight(header.number.toNumber());
+    //     if (!block) {
+    //         console.error(`Block not found for height ${header.number.toNumber()}`);
+    //         return;
+    //     }
+
+    //     console.log(block.height);
+    // });
 }
 
 export function stopIndexing(): void {
