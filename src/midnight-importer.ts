@@ -36,8 +36,10 @@ import { start } from 'node:repl';
 
 /**
  * インポートを開始します。
+ * @param startHeight 開始ブロック高さ
+ * @param batchSize バッチサイズ（デフォルト: 10）
  */
-export async function startImporting(startHeight: number = 0):
+export async function startImporting(startHeight: number = 0, batchSize: number = 30):
     Promise<void> {
 
     const pool = await connectPostgres();
@@ -59,27 +61,34 @@ export async function startImporting(startHeight: number = 0):
 
     console.log(`🚀 インポートを開始します...`);
     console.log(`📊 総ブロック数: ${height.toLocaleString()}`);
+    console.log(`📦 バッチサイズ: ${batchSize}`);
 
-    for (let i = startHeight; i < height; i++) {
+    // バッチ処理でブロックを処理
+    for (let i = startHeight; i < height; i += batchSize) {
+        const batchEnd = Math.min(i + batchSize, height);
+        const batch = [];
+        for (let j = i; j < batchEnd; j++) {
+            batch.push(j);
+        }
 
-        await processBlock(i);
-        processedBlocks++;
+        await processBatch(batch);
+        processedBlocks += batch.length;
 
         // 進捗を表示
-        if (processedBlocks % progressInterval === 0 || processedBlocks === height) {
+        if (processedBlocks % progressInterval === 0 || processedBlocks >= height - startHeight) {
             const elapsed = (Date.now() - startTime) / 1000; // 秒
             const speed = processedBlocks / elapsed; // ブロック/秒
-            const remainingBlocks = height - processedBlocks;
+            const remainingBlocks = height - startHeight - processedBlocks;
             const eta = remainingBlocks / speed; // 秒
 
-            const progressPercent = ((processedBlocks / height) * 100).toFixed(2);
+            const progressPercent = ((processedBlocks / (height - startHeight)) * 100).toFixed(2);
             const elapsedMinutes = Math.floor(elapsed / 60);
             const elapsedSeconds = Math.floor(elapsed % 60);
             const etaMinutes = Math.floor(eta / 60);
             const etaSeconds = Math.floor(eta % 60);
 
             console.log(
-                `📈 進捗: ${processedBlocks.toLocaleString()}/${height.toLocaleString()} (${progressPercent}%) | ` +
+                `📈 進捗: ${processedBlocks.toLocaleString()}/${(height - startHeight).toLocaleString()} (${progressPercent}%) | ` +
                 `速度: ${speed.toFixed(2)} ブロック/秒 | ` +
                 `経過時間: ${elapsedMinutes}分${elapsedSeconds}秒 | ` +
                 `ETA: ${etaMinutes}分${etaSeconds}秒`
@@ -98,29 +107,53 @@ export async function startImporting(startHeight: number = 0):
 }
 
 
-async function processBlock(height: number): Promise<void> {
+/**
+ * バッチでブロックを処理します。
+ * @param heights 処理するブロック高さの配列
+ */
+async function processBatch(heights: number[]): Promise<void> {
     await withPgClient(async (client) => {
         await client.query('BEGIN');
 
         try {
-            console.log(`🔍 Processing block ${height.toString()}...`);
-            const [polkadotBlock, graphqlBlock] = await Promise.all([
-                getBlockDataByHeight(height),
-                getBlockByHeight(height)
-            ]);
+            // バッチ内のブロックデータを並列で取得
+            const blockDataPromises = heights.map(height => 
+                Promise.all([
+                    getBlockDataByHeight(height),
+                    getBlockByHeight(height)
+                ]).then(([polkadotBlock, graphqlBlock]) => ({
+                    height,
+                    polkadotBlock,
+                    graphqlBlock
+                }))
+            );
 
-            await insertBlock(client, polkadotBlock);
-            await insertGraphQLBlock(client, graphqlBlock);
+            const blockDataArray = await Promise.all(blockDataPromises);
+
+            // ブロックを順次処理（データベースの整合性を保つため）
+            for (const { height, polkadotBlock, graphqlBlock } of blockDataArray) {
+                console.log(`🔍 Processing block ${height.toString()} ...`);
+                await insertBlock(client, polkadotBlock);
+                await insertGraphQLBlock(client, graphqlBlock);
+            }
 
             await client.query('COMMIT');
-            console.log(`✅ Block ${height.toString()} processed successfully!`);
+            console.log(`✅ Batch processed: blocks ${heights[0]} to ${heights[heights.length - 1]} (${heights.length} blocks)`);
         }
         catch (error) {
             await client.query('ROLLBACK');
-            console.error(`[midnight-importer] ❌ Error processing block ${height}:`, error);
+            console.error(`[midnight-importer] ❌ Error processing batch [${heights[0]} - ${heights[heights.length - 1]}]:`, error);
             throw error;
         }
     });
+}
+
+/**
+ * 単一ブロックを処理します（後方互換性のため残す）。
+ * @param height ブロック高さ
+ */
+async function processBlock(height: number): Promise<void> {
+    await processBatch([height]);
 }
 
 

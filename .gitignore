@@ -2,3 +2,4 @@ src/dist/
 src/node_modules/
 src/production.env
 src/mn-preview-indexer.service
+start.sh
