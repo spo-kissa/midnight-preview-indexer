@@ -163,13 +163,13 @@ async function processBatch(heights: number[]): Promise<void> {
  * Midnightインデックスを開始します。
  */
 export async function startMidnightIndex(): Promise<void> {
-    subscribe(async (header: Header, api: ApiPromise) => {
+    subscribe(async (header: Header) => {
         
         console.log(`🔍 New block ${header.number.toNumber()}`);
 
         await importNewBlock(header);
 
-    }, async (header: Header, api: ApiPromise) => {
+    }, async (header: Header) => {
 
         console.log(`🔍 Finalized block ${header.number.toNumber()}`);
 
