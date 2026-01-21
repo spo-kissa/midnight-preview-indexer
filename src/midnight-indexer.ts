@@ -42,6 +42,7 @@ function getWebSocketUrl(): string {
     // HTTPエンドポイントと同じパスを使用（多くのGraphQLサーバーでこれが標準）
     // const baseUrl = MIDNIGHT_GRAPHQL_URL.replace(/^https?:\/\//, 'wss://').replace(/^http:\/\//, 'ws://') + '/ws';
     return 'wss://rpc.preview.midnight.network'; //baseUrl;
+    // return 'wss://indexer.preview.midnight.network/api/v3/graphql/ws';
 }
 
 const MIDNIGHT_GRAPHQL_WS_URL = getWebSocketUrl();
@@ -63,6 +64,65 @@ export async function getBlockByHeight(
         variables
     );
     return data.block;
+}
+
+/**
+ * GraphQLで取得可能な最大ブロック高を取得します。
+ * バイナリサーチを使用して効率的に最大ブロック高を見つけます。
+ * @param initialMaxHeight 初期探索範囲の最大高さ（デフォルト: 1000000）
+ * @returns 最大ブロック高さ。ブロックが見つからない場合は0を返します。
+ */
+export async function getMaxBlockHeightFromGraphQL(
+    initialMaxHeight: number = 1000000
+): Promise<number> {
+    let min = 0;
+    let max = initialMaxHeight;
+    let lastValidHeight = 0;
+
+    // まず初期最大高さでブロックが存在するか確認
+    try {
+        const testBlock = await getBlockByHeight(max);
+        if (testBlock) {
+            // 初期最大高さより大きいブロックが存在する可能性があるため、
+            // より大きな範囲を探索する
+            while (true) {
+                const nextHeight = max * 2;
+                try {
+                    const nextBlock = await getBlockByHeight(nextHeight);
+                    if (nextBlock) {
+                        max = nextHeight;
+                        lastValidHeight = nextHeight;
+                    } else {
+                        break;
+                    }
+                } catch {
+                    break;
+                }
+            }
+        }
+    } catch {
+        // 初期最大高さでブロックが見つからない場合は、その範囲内で探索
+    }
+
+    // バイナリサーチで最大ブロック高を見つける
+    while (min <= max) {
+        const mid = Math.floor((min + max) / 2);
+        
+        try {
+            const block = await getBlockByHeight(mid);
+            if (block) {
+                lastValidHeight = mid;
+                min = mid + 1; // より高いブロックを探索
+            } else {
+                max = mid - 1; // より低いブロックを探索
+            }
+        } catch (error: any) {
+            // エラーが発生した場合（ブロックが存在しないなど）、より低いブロックを探索
+            max = mid - 1;
+        }
+    }
+
+    return lastValidHeight;
 }
 
 

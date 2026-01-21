@@ -50,7 +50,7 @@ async function processBlock(height: number): Promise<void> {
  * @param startHeight 開始ブロック高さ
  * @param batchSize バッチサイズ（デフォルト: 10）
  */
-export async function startImporting(startHeight: number = 0, batchSize: number = 30):
+export async function startImporting(startHeight: number = 0, batchSize: number = 10):
     Promise<void> {
 
     const pool = await connectPostgres();
@@ -64,7 +64,7 @@ export async function startImporting(startHeight: number = 0, batchSize: number 
     // Polkadot APIに接続
     await connectToChain();
 
-    let height = Number(await getFinalizedBlockHeight());
+    let height = Number(Math.min(await getFinalizedBlockHeight(), await getMaxBlockHeight(client)));
 
     const startTime = Date.now();
     let processedBlocks = 0;
@@ -105,7 +105,7 @@ export async function startImporting(startHeight: number = 0, batchSize: number 
                 `ETA: ${etaMinutes}分${etaSeconds}秒`
             );
 
-            height = Number(await getFinalizedBlockHeight());
+            height = Number(Math.min(await getFinalizedBlockHeight(), await getMaxBlockHeight(client)));
         }
     }
 
