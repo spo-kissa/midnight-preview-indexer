@@ -16,7 +16,7 @@ import {
   encodeToMnAddr
 } from './midnight-indexer';
 import { runMigrations } from './migrate';
-import { processBlock, startImporting } from './midnight-importer';
+import { processBlock, startImporting, detectAndImportMissingBlocks } from './midnight-importer';
 
 async function main() {
   // コマンドライン引数からブロック番号を取得
@@ -293,6 +293,34 @@ async function main() {
       return;
     }
     
+    // 抜けているブロックを検出してインポートするモード
+    if (command === '--detect-missing' || command === 'detect-missing') {
+      console.log('🔍 抜けているブロックを検出してインポートします...');
+      
+      try {
+        await connectPostgres();
+        
+        // オプションでバッチサイズを指定
+        let batchSize = 10; // デフォルト値
+        if (args[1]) {
+          const customBatchSize = parseInt(args[1], 10);
+          if (!isNaN(customBatchSize) && customBatchSize > 0) {
+            batchSize = customBatchSize;
+          } else {
+            console.warn(`⚠️ 無効なバッチサイズ: ${args[1]}, デフォルト値 ${batchSize} を使用します`);
+          }
+        }
+        
+        const importedCount = await detectAndImportMissingBlocks(batchSize);
+        console.log(`✅ 抜けているブロックのインポートが完了しました (${importedCount} ブロック)`);
+        process.exit(0);
+      } catch (err) {
+        console.error('[indexer] fatal error', err);
+        process.exit(1);
+      }
+      return;
+    }
+    
     // Polkadot APIから最新のブロック高を表示するモード
     if (command === '--latest' || command === 'latest' || command === '--current' || command === 'current') {
       console.log('📊 Polkadot APIから最新のブロック高を取得します...');
@@ -357,6 +385,7 @@ async function main() {
       console.error('  npm run dev --show <高さ>      # 指定された高さのブロックを表示');
       console.error('  npm run dev --watch-graphql    # GraphQLを使用して最新のブロックを購読');
       console.error('  npm run dev --latest           # Polkadot APIから最新のブロック高を表示');
+      console.error('  npm run dev --detect-missing [バッチサイズ]  # 抜けているブロックを検出してインポート');
       process.exit(1);
     }
     

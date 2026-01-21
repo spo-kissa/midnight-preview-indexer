@@ -51,19 +51,23 @@ const MIDNIGHT_GRAPHQL_WS_URL = getWebSocketUrl();
 /**
  * ブロックを高さから取得します。
  * @param height ブロック高さ
- * @returns ブロックデータ
+ * @returns ブロックデータ。ブロックが見つからない場合はnullを返します。
  */
 export async function getBlockByHeight(
     height: number
-): Promise<GetBlockByHeightQuery['block']>
+): Promise<GetBlockByHeightQuery['block'] | null>
 {
     var variables: GetBlockByHeightQueryVariables = { height };
-    const data: GetBlockByHeightQuery = await request(
-        MIDNIGHT_GRAPHQL_URL,
-        GetBlockByHeightDocument,
-        variables
-    );
-    return data.block;
+    try {
+        const data = await request(
+            MIDNIGHT_GRAPHQL_URL,
+            GetBlockByHeightDocument,
+            variables
+        );
+        return data.block;
+    } catch (error: any) {
+        return null;
+    }
 }
 
 /**

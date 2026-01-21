@@ -978,3 +978,158 @@ async function getMaxBlockHeight(client: PoolClient): Promise<number> {
     }
     return maxHeight;
 }
+
+/**
+ * 最小ブロック高さを取得します。
+ * データベースが空の場合は0を返します。
+ * 
+ * @param client データベースクライアント
+ * @returns 最小ブロック高さ
+ */
+async function getMinBlockHeight(client: PoolClient): Promise<number> {
+    const result = await client.query(`
+        SELECT MIN(height) FROM blocks
+    `);
+    const minHeight = result.rows[0]?.min as number | null;
+    if (!minHeight) {
+        return 0;
+    }
+    return minHeight;
+}
+
+/**
+ * 抜けているブロック高を検出し、そのブロック情報をインポートします。
+ * @param batchSize 一度に処理するブロック数（デフォルト: 10）
+ * @returns インポートされたブロック数
+ */
+export async function detectAndImportMissingBlocks(batchSize: number = 10): Promise<number> {
+    console.log('🔍 抜けているブロック高を検出中...');
+
+    const pool = await connectPostgres();
+    const client = await pool.connect();
+
+    try {
+        // 最小と最大のブロック高を取得
+        const minHeight = await getMinBlockHeight(client);
+        const maxHeight = await getMaxBlockHeight(client);
+
+        if (minHeight === 0 || maxHeight === 0) {
+            console.log('⚠️ データベースにブロックが存在しません');
+            return 0;
+        }
+
+        console.log(`📊 ブロック高範囲: ${minHeight} - ${maxHeight}`);
+
+        // 抜けているブロック高を検出
+        const missingHeightsResult = await client.query<{ height: number }>(`
+            SELECT s.height
+            FROM generate_series($1::BIGINT, $2::BIGINT) AS s(height)
+            LEFT JOIN blocks b ON b.height = s.height
+            WHERE b.height IS NULL
+            ORDER BY s.height
+        `, [minHeight, maxHeight]);
+
+        const missingHeights = missingHeightsResult.rows.map(row => row.height);
+
+        if (missingHeights.length === 0) {
+            console.log('✅ 抜けているブロックはありません');
+            return 0;
+        }
+
+        console.log(`📦 ${missingHeights.length}個の抜けているブロックを検出しました`);
+
+        // Polkadot APIに接続（まだ接続されていない場合）
+        await connectToChain();
+
+        let importedCount = 0;
+        const startTime = Date.now();
+
+        // バッチで処理
+        for (let i = 0; i < missingHeights.length; i += batchSize) {
+            const batch = missingHeights.slice(i, i + batchSize);
+            const batchEnd = Math.min(i + batchSize, missingHeights.length);
+
+            console.log(`🔄 処理中: ${i + 1}/${missingHeights.length} (ブロック: ${batch[0]} - ${batch[batch.length - 1]})`);
+
+            for (const height of batch) {
+                let polkadotBlock = null;
+                let graphqlBlock = null;
+
+                try {
+                    // Polkadot APIからブロックを取得
+                    polkadotBlock = await getBlockDataByHeight(height);
+                } catch (error) {
+                    console.warn(`⚠️ ブロック ${height} のPolkadot API取得エラー:`, error);
+                }
+
+                try {
+                    // GraphQLからブロックを取得（失敗しても続行）
+                    graphqlBlock = await getBlockByHeight(height);
+                } catch (error) {
+                    console.warn(`⚠️ ブロック ${height} のGraphQL取得エラー:`, error);
+                    // GraphQLの取得に失敗してもPolkadot APIのデータはインポートする
+                }
+
+                // Polkadot APIのデータが取得できた場合のみインポート
+                if (polkadotBlock || graphqlBlock) {
+                    try {
+                        await withPgClient(async (client) => {
+                            await client.query('BEGIN');
+
+                            try {
+                                // Polkadot APIから取得したブロックをインポート
+                                if (polkadotBlock) {
+                                    await insertBlock(client, polkadotBlock);
+                                }
+
+                                // GraphQLから取得したブロックをインポート
+                                if (graphqlBlock) {
+                                    await insertGraphQLBlock(client, graphqlBlock);
+                                }
+
+                                await client.query('COMMIT');
+                                importedCount++;
+                                console.log(`✅ ブロック ${height} をインポートしました (Polkadot: ${polkadotBlock ? '✓' : '✗'}, GraphQL: ${graphqlBlock ? '✓' : '✗'})`);
+                            }
+                            catch (error) {
+                                await client.query('ROLLBACK');
+                                console.error(`❌ ブロック ${height} のインポートエラー:`, error);
+                                throw error;
+                            }
+                        });
+                    } catch (error) {
+                        console.error(`❌ ブロック ${height} のインポートエラー:`, error);
+                        // エラーが発生しても次のブロックを処理し続ける
+                    }
+                } else {
+                    console.warn(`⚠️ ブロック ${height} はPolkadot APIとGraphQLの両方から取得できませんでした`);
+                }
+            }
+
+            // 進捗を表示
+            const elapsed = (Date.now() - startTime) / 1000;
+            const speed = importedCount / elapsed;
+            const remaining = missingHeights.length - (i + batchSize);
+            const eta = remaining / speed;
+
+            console.log(
+                `📈 進捗: ${Math.min(batchEnd, missingHeights.length)}/${missingHeights.length} | ` +
+                `インポート済み: ${importedCount} | ` +
+                `速度: ${speed.toFixed(2)} ブロック/秒 | ` +
+                `ETA: ${Math.floor(eta / 60)}分${Math.floor(eta % 60)}秒`
+            );
+        }
+
+        const totalTime = (Date.now() - startTime) / 1000;
+        const totalMinutes = Math.floor(totalTime / 60);
+        const totalSeconds = Math.floor(totalTime % 60);
+
+        console.log(`\n✅ 抜けているブロックのインポートが完了しました！`);
+        console.log(`📊 インポートされたブロック数: ${importedCount}/${missingHeights.length}`);
+        console.log(`⏱️ 総処理時間: ${totalMinutes}分${totalSeconds}秒`);
+
+        return importedCount;
+    } finally {
+        client.release();
+    }
+}
