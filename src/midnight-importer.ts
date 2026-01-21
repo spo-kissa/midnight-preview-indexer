@@ -32,6 +32,9 @@ import {
     encodeToMnAddr,
 } from './midnight-indexer';
 
+// GraphQLブロックインポートのキュー（ブロック高さの配列）
+const pendingGraphQLBlocks: number[] = [];
+
 
 /**
  * 単一ブロックを処理します（後方互換性のため残す）。
@@ -163,13 +166,13 @@ async function processBatch(heights: number[]): Promise<void> {
  * Midnightインデックスを開始します。
  */
 export async function startMidnightIndex(): Promise<void> {
-    subscribe(async (header: Header, api: ApiPromise) => {
+    subscribe(async (header: Header) => {
         
         console.log(`🔍 New block ${header.number.toNumber()}`);
 
         await importNewBlock(header);
 
-    }, async (header: Header, api: ApiPromise) => {
+    }, async (header: Header) => {
 
         console.log(`🔍 Finalized block ${header.number.toNumber()}`);
 
@@ -206,6 +209,7 @@ async function importNewBlock(header: Header): Promise<void> {
  */
 async function importFinalizedBlock(header: Header): Promise<void> {
     const data = await getBlockData(header);
+    const blockHeight = header.number.toNumber();
 
     await withPgClient(async (client) => {
         await client.query('BEGIN');
@@ -220,6 +224,46 @@ async function importFinalizedBlock(header: Header): Promise<void> {
             throw error;
         }
     });
+
+    // 現在のブロックとキュー内のブロックを処理
+    const blocksToProcess = [blockHeight, ...pendingGraphQLBlocks];
+    pendingGraphQLBlocks.length = 0; // キューをクリア
+
+    for (const height of blocksToProcess) {
+        try {
+            const graphqlBlock = await getBlockByHeight(height);
+            
+            if (graphqlBlock) {
+                // ブロックが存在する場合はインポート
+                await withPgClient(async (client) => {
+                    await client.query('BEGIN');
+
+                    try {
+                        await insertGraphQLBlock(client, graphqlBlock);
+                        await client.query('COMMIT');
+                        console.log(`✅ GraphQL block ${height} imported successfully`);
+                    }
+                    catch (error) {
+                        await client.query('ROLLBACK');
+                        console.error(`❌ Error importing GraphQL block ${height}:`, error);
+                        throw error;
+                    }
+                });
+            } else {
+                // ブロックが存在しない場合はキューに追加
+                if (!pendingGraphQLBlocks.includes(height)) {
+                    pendingGraphQLBlocks.push(height);
+                    console.log(`⏳ GraphQL block ${height} not available, queued for next update`);
+                }
+            }
+        } catch (error) {
+            // エラーが発生した場合もキューに追加（ネットワークエラーなど）
+            if (!pendingGraphQLBlocks.includes(height)) {
+                pendingGraphQLBlocks.push(height);
+                console.error(`❌ Error fetching GraphQL block ${height}, queued for retry:`, error);
+            }
+        }
+    }
 }
 
 /**
