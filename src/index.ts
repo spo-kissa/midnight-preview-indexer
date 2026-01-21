@@ -16,7 +16,7 @@ import {
   encodeToMnAddr
 } from './midnight-indexer';
 import { runMigrations } from './migrate';
-import { startImporting } from './midnight-importer';
+import { processBlock, startImporting } from './midnight-importer';
 
 async function main() {
   // コマンドライン引数からブロック番号を取得
@@ -363,21 +363,7 @@ async function main() {
     console.log(`📦 Block ${blockNumber.toLocaleString()} をインデックスします...`);
     
     try {
-      const api = await connectToChain();
-      await connectPostgres();
-      
-      // ファイナライズされたブロックの高さを取得
-      let finalizedBlockHeight: number | undefined;
-      try {
-        const finalizedHash = await api.rpc.chain.getFinalizedHead();
-        const finalizedHeader = await api.rpc.chain.getHeader(finalizedHash);
-        finalizedBlockHeight = finalizedHeader.number.toNumber();
-      } catch (err) {
-        console.warn(`Failed to get finalized block height:`, err);
-      }
-      
-      const extrinsicCount = await indexBlock(api, blockNumber, 0, finalizedBlockHeight);
-      console.log(`✅ Block ${blockNumber.toLocaleString()} indexed (${extrinsicCount} extrinsics)`);
+      await processBlock(blockNumber);
       
       process.exit(0);
     } catch (err) {

@@ -40,7 +40,7 @@ const pendingGraphQLBlocks: number[] = [];
  * 単一ブロックを処理します（後方互換性のため残す）。
  * @param height ブロック高さ
  */
-async function processBlock(height: number): Promise<void> {
+export async function processBlock(height: number): Promise<void> {
     await processBatch([height]);
 }
 
@@ -255,7 +255,6 @@ async function importFinalizedBlock(header: Header): Promise<void> {
                 // ブロックが存在しない場合はキューに追加
                 if (!pendingGraphQLBlocks.includes(height)) {
                     pendingGraphQLBlocks.push(height);
-                    console.log(`⏳ GraphQL block ${height} not available, queued for next update`);
                 }
             }
         } catch (error) {
