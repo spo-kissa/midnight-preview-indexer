@@ -31,7 +31,15 @@ import {
     isContractBalance,
     encodeToMnAddr,
 } from './midnight-indexer';
-import { start } from 'node:repl';
+
+
+/**
+ * 単一ブロックを処理します（後方互換性のため残す）。
+ * @param height ブロック高さ
+ */
+async function processBlock(height: number): Promise<void> {
+    await processBatch([height]);
+}
 
 
 /**
@@ -93,6 +101,8 @@ export async function startImporting(startHeight: number = 0, batchSize: number 
                 `経過時間: ${elapsedMinutes}分${elapsedSeconds}秒 | ` +
                 `ETA: ${etaMinutes}分${etaSeconds}秒`
             );
+
+            height = Number(await getFinalizedBlockHeight());
         }
     }
 
@@ -146,14 +156,6 @@ async function processBatch(heights: number[]): Promise<void> {
             throw error;
         }
     });
-}
-
-/**
- * 単一ブロックを処理します（後方互換性のため残す）。
- * @param height ブロック高さ
- */
-async function processBlock(height: number): Promise<void> {
-    await processBatch([height]);
 }
 
 
