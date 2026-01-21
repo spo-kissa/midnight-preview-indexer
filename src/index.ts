@@ -2,17 +2,21 @@ import 'dotenv/config';
 import { startIndexing, startWatchingGraphQL, indexBlock, connectToChain } from './indexer';
 import { connectPostgres, clearAllData, backfillExtrinsicHashes } from './database';
 import {
-  encodeToMnAddrPreview,
   getBlockByHeight,
+  isContractCall,
   isDustGenerationDtimeUpdate,
   isRegularTransaction,
   isSystemTransaction,
   isDustInitialUtxo,
   isDustSpendProcessed,
   isParamChange,
+  isContractBalance,
   decodeFromMnAddrPreview,
-  TOKEN_TYPE
+  TOKEN_TYPE,
+  encodeToMnAddr
 } from './midnight-indexer';
+import { runMigrations } from './migrate';
+import { startImporting } from './midnight-importer';
 
 async function main() {
   // コマンドライン引数からブロック番号を取得
@@ -52,7 +56,22 @@ async function main() {
       }
       return;
     }
-    
+
+    // マイグレーションコマンド
+    if (command === '--migrate' || command === 'migrate') {
+      console.log('🔄 データベースマイグレーションを実行します...');
+      
+      try {
+        await runMigrations();
+        console.log('✅ マイグレーションが完了しました');
+        process.exit(0);
+      } catch (err) {
+        console.error('[indexer] fatal error', err);
+        process.exit(1);
+      }
+      return;
+    }
+
     // ブロック表示コマンド
     if (command === '--show' || command === 'show') {
       const heightArg = args[1];
@@ -76,7 +95,7 @@ async function main() {
       let counter = 0;
       while (true) {
 
-        if (counter > 10) {
+        if (counter > 0) {
           break;
         }
 
@@ -179,10 +198,27 @@ async function main() {
                 console.log(`    合計入力: ${(totalInput / 1000000).toLocaleString(undefined, { minimumFractionDigits: 6, maximumFractionDigits: 6, useGrouping: true })} (${totalInput} lovelace)`);
                 console.log(`    合計出力: ${(totalOutput / 1000000).toLocaleString(undefined, { minimumFractionDigits: 6, maximumFractionDigits: 6, useGrouping: true })} (${totalOutput} lovelace)`);
 
+                console.log(`    コントラクトアクション数: ${tx.contractActions.length}`);
                 if (tx.contractActions && tx.contractActions.length > 0) {
-                  console.log(`    コントラクトアクション数: ${tx.contractActions.length}`);
                   tx.contractActions.forEach((action) => {
                     console.log(`        # ${action.__typename}`);
+                    console.log(`        Address: ${action.address} ${encodeToMnAddr(action.address)}`);
+                    console.log(`        State: ${action.state}`);
+                    console.log(`        Tx Hash: ${action.transaction.hash}`);
+                    console.log(`        Balances: (${action.unshieldedBalances.length})`);
+                    for (const balance of action.unshieldedBalances) {
+                      if (isContractBalance(balance)) {
+                        console.log(`        (${index + 1}): ${balance.__typename}`);
+                        console.log(`        Token Type: ${balance.tokenType} (${balance.tokenType == TOKEN_TYPE.NIGHT ? 'NIGHT' : 'unknown'})`);
+                        console.log(`        Balance: ${balance.amount}`);
+                      }
+                    }
+                    console.log(`        Zswap State: ${action.zswapState}`);
+
+                    if (isContractCall(action)) {
+                      console.log(`        Deploy: ${action.deploy}`);
+                      console.log(`        Tx Index: ${action.entryPoint}`);
+                    }
                   });
                 }
 
@@ -222,11 +258,11 @@ async function main() {
           
           console.log('\n' + '='.repeat(80));
 
-          counter++;
         } catch (err) {
           console.error('[indexer] fatal error', err);
           process.exit(1);
         }
+        counter++;
       }
       process.exit(0);
     }
@@ -267,6 +303,7 @@ async function main() {
       console.error('  npm run dev <ブロック番号>     # 特定のブロックをインデックス');
       console.error('  npm run dev --clear            # 全てのデータをクリア');
       console.error('  npm run dev --backfill-hash    # 既存データのhashをrawから更新');
+      console.error('  npm run dev --migrate          # データベースマイグレーションを実行');
       console.error('  npm run dev --show <高さ>      # 指定された高さのブロックを表示');
       console.error('  npm run dev --watch-graphql    # GraphQLを使用して最新のブロックを購読');
       process.exit(1);
@@ -298,7 +335,8 @@ async function main() {
     }
   } else {
     // 通常のインデックス処理を開始
-    await startIndexing();
+    // await startIndexing();
+    await startImporting();
   }
 }
 

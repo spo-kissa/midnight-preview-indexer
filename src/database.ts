@@ -232,17 +232,26 @@ export async function clearAllData(): Promise<void> {
         try {
             // 全てのテーブルを一度にTRUNCATE CASCADE
             // CASCADEにより、外部キー制約のあるテーブルも自動的に処理される
+            // RESTART IDENTITYにより、テーブルのIDもリセットされる
             await client.query(`
                 TRUNCATE TABLE 
                     blocks,
+                    transactions,
+                    tx_outputs,
+                    tx_inputs,
                     accounts,
                     account_balances,
                     account_tx,
                     shielded_notes,
                     extrinsics,
                     events,
+                    addresses,
+                    tx_identifiers,
+                    tx_results,
+                    tx_dust_ledger_events,
+                    tx_zswap_ledger_events,
                     indexer_state
-                CASCADE
+                RESTART IDENTITY CASCADE
             `);
             
             await client.query('COMMIT');

@@ -17,6 +17,10 @@ import type {
     DustInitialUtxo,
     DustSpendProcessed,
     ParamChange,
+    ContractCall,
+    ContractDeploy,
+    ContractUpdate,
+    ContractBalance,
 } from './graphql/generated';
 import {
     GetBlockByHeightDocument,
@@ -146,6 +150,29 @@ export function isParamChange(event: any): event is ParamChange {
 
 
 
+export function isContractCall(action: any): action is ContractCall {
+    return '__typename' in action && action.__typename === 'ContractCall';
+}
+
+export function isContractDeploy(action: any): action is ContractDeploy {
+    return '__typename' in action && action.__typename === 'ContractDeploy';
+}
+
+export function isContractUpdate(action: any): action is ContractUpdate {
+    return '__typename' in action && action.__typename === 'ContractUpdate';
+}
+
+
+export function isUnshieldedUtxo(output: any): output is UnshieldedUtxo {
+    return '__typename' in output && output.__typename === 'UnshieldedUtxo';
+}
+
+
+export function isContractBalance(balance: any): balance is ContractBalance {
+    return '__typename' in balance && balance.__typename === 'ContractBalance';
+}
+
+
 /**
  * 16進数文字列を mn_addr_preview 形式 (Bech32m) にエンコードします。
  * @param hexAddress 16進数エンコードされたアドレス (例: "0x1234...")
@@ -239,20 +266,58 @@ export async function connectToChain(): Promise<ApiPromise> {
 
     console.log('[midnight-indexer] 🔌 Connecting to Midnight RPC:', MIDNIGHT_GRAPHQL_WS_URL);
 
-    const provider = new WsProvider(MIDNIGHT_GRAPHQL_WS_URL);
-    api = await ApiPromise.create({
-        provider: provider as ProviderInterface,
-        noInitWarn: true,
-    });
+    const maxRetries = 3;
+    let lastError: Error | null = null;
 
-    const chain = await api.rpc.system.chain();
-    const nodeName = await api.rpc.system.name();
-    const nodeVersion = await api.rpc.system.version();
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            const provider = new WsProvider(MIDNIGHT_GRAPHQL_WS_URL);
 
-    console.log(`[midnight-indexer] ✅ Connected to ${chain} via ${nodeName} v${nodeVersion}`)
+            api = await ApiPromise.create({
+                provider: provider as ProviderInterface,
+                noInitWarn: true,
+                throwOnConnect: false,
+            });
+        
+            const chain = await api.rpc.system.chain();
+            const nodeName = await api.rpc.system.name();
+            const nodeVersion = await api.rpc.system.version();
+        
+            console.log(`[midnight-indexer] ✅ Connected to ${chain} via ${nodeName} v${nodeVersion}`)
+        
+            return api;
 
-    return api;
+        } catch (error: any) {
+            lastError = error as Error;
+            console.error(`[midnight-indexer] ❌ Failed to create API (attempt ${attempt}/${maxRetries}):`, error);
+
+            if (attempt < maxRetries) {
+                console.log(`[midnight-indexer] Retrying in 1 second...`);
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+        }
+    }
+    throw new Error(`Failed to connect to Midnight RPC after ${maxRetries} attempts: ${lastError?.message || 'Unknown error'}`);
 }
+
+
+export async function getFinalizedBlockHash(): Promise<BlockHash> {
+    if (!api || !api.isConnected) {
+        api =await connectToChain();
+    }
+    return await api.rpc.chain.getFinalizedHead();
+}
+
+
+export async function getFinalizedBlockHeight(): Promise<number> {
+    if (!api || !api.isConnected) {
+        api =await connectToChain();
+    }
+    const hash = await getFinalizedBlockHash();
+    const header = await api.rpc.chain.getHeader(hash);
+    return header.number.toNumber();
+}
+
 
 /**
  * 新しいブロックを購読します。
@@ -347,10 +412,56 @@ export async function getBlockFromHash(hash: BlockHash): Promise<SignedBlock> {
  */
 export async function blockHashToTimestamp(hash: BlockHash): Promise<number> {
     if (!api || !api.isConnected) {
+        console.log(`[midnight-indexer] 🔍 Connecting to chain...`);
         api =await connectToChain();
     }
-    return await api.query.timestamp.now.at(hash);
+    try {
+        return Number(await api.query.timestamp.now.at(hash));
+    } catch (error: any) {
+        console.error('[midnight-indexer] fatal error', error);
+        return 0;
+    }
 }
+
+/**
+ * timestampをDateに変換
+ * @param timestamp Unix timestamp (ミリ秒単位)
+ * @returns Dateオブジェクト（UTC）
+ */
+export function toDate(timestamp: number): Date | null {
+    const dt = new Date(timestamp);
+    if (dt.getFullYear() < 2025 || dt.getFullYear() > 2026) {
+        const udt = new Date(timestamp * 1000);
+        if (udt.getFullYear() < 2025 || udt.getFullYear() > 2026) {
+            const ddt = new Date(timestamp / 1000);
+            if (ddt.getFullYear() < 2025 || ddt.getFullYear() > 2026) {
+                console.warn(`[midnight-indexer] 🔍 Invalid timestamp: ${timestamp}, returning default date: 2025-08-05 12:00:00`);
+                return new Date(2025, 8, 5, 12);
+//                throw new Error(`Invalid timestamp: ${timestamp}`);
+            }
+            return ddt;
+        }
+        return udt;
+    }
+    return dt;
+}
+
+
+export async function getBlockDataByHeight(height: number): Promise<Block> {
+    if (!api || !api.isConnected) {
+        api =await connectToChain();
+    }
+    if (height < 0) {
+        throw new Error(`Invalid height: ${height}`);
+    }
+
+    const hash = await getBlockHashFromHeight(height);
+
+    const block = await getBlockFromHash(hash);
+
+    return await getBlockData(block.block.header);
+}
+
 
 /**
  * ブロックヘッダーからブロックデータを取得します。
@@ -366,10 +477,13 @@ export async function getBlockData(header: Header): Promise<Block> {
 
     const block = await getBlockFromHash(hash);
 
-    const extrinsics = await Promise.all(block.block.extrinsics.map<Promise<Extrinsic>>(async(extrinsic, index) => {
+    const extrinsics: Extrinsic[] = [];
+    for (let index = 0; index < block.block.extrinsics.length; index++) {
+        const extrinsic = block.block.extrinsics[index];
+
         const method = extrinsic.method;
-        const timestamp = await blockHashToTimestamp(extrinsic.hash);
-        return {
+        const timestamp = await blockHashToTimestamp(hash);
+        const data = {
             index: index,
             blockHeight: header.number.toNumber(),
             blockHash: hash.toString().substring(2).toLowerCase(),
@@ -397,12 +511,22 @@ export async function getBlockData(header: Header): Promise<Block> {
             data: Buffer.from(extrinsic.data).toString('hex'),
             timestamp: timestamp,
         };
-    }));
+
+        extrinsics.push(data);
+    }
+
+    let parentHash = '0'.repeat(64);
+    try {
+        parentHash = header.number.toNumber() > 0 ? header.parentHash.toString().substring(2).toLowerCase() : '0'.repeat(62);
+    } catch (error: any) {
+        console.error('[midnight-indexer] fatal error', error);
+        parentHash = '0'.repeat(64);
+    }
 
     return {
         hash: header.hash.toString().substring(2).toLowerCase(),
         height: header.number.toNumber(),
-        parentHash: header.parentHash.toString().substring(2).toLowerCase(),
+        parentHash: parentHash,
         stateRoot: header.stateRoot.toString().substring(2).toLowerCase(),
         timestamp: await blockHashToTimestamp(hash),
         isFinalized: false,
@@ -414,7 +538,7 @@ export async function getBlockData(header: Header): Promise<Block> {
             header: {
                 header: header.toString(),
                 number: header.number.toString(),
-                parentHash: header.parentHash.toString().substring(2).toLowerCase(),
+                parentHash: parentHash,
                 stateRoot: header.stateRoot.toString().substring(2).toLowerCase(),
                 extrinsicsRoot: header.extrinsicsRoot.toString().substring(2).toLowerCase(),
                 digest: header.digest.toString(),
