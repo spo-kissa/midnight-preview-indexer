@@ -11,10 +11,6 @@
     "target": "ES2022",
     "moduleResolution": "node",
     "types": ["node"],
-    "baseUrl": ".",
-    "paths": {
-      "pg": ["types/pg"]
-    },
     // libを指定しないことで、targetから自動的に適切なlibが選択され、
     // @types/nodeからのグローバル（console, process, fs等）も正しく読み込まれる
     // Other Outputs

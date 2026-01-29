@@ -27,7 +27,7 @@ import {
     ConnectWalletDocument,
     DisconnectWalletDocument
 } from './graphql/generated';
-import { Block, BlockRaw, Extrinsic } from 'types/chain';
+import { Block, BlockRaw, Extrinsic } from './types/chain';
 
 const MIDNIGHT_GRAPHQL_URL = process.env.MIDNIGHT_GRAPHQL_URL || 'https://indexer.preview.midnight.network/api/v3/graphql';
 
@@ -57,7 +57,7 @@ export async function getBlockByHeight(
     height: number
 ): Promise<GetBlockByHeightQuery['block'] | null>
 {
-    var variables: GetBlockByHeightQueryVariables = { height };
+    var variables: GetBlockByHeightQueryVariables = { height: Number(height) };
     try {
         const data = await request(
             MIDNIGHT_GRAPHQL_URL,

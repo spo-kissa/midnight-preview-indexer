@@ -2,7 +2,7 @@ import { connectPostgres, withPgClient } from './database';
 import type { ApiPromise } from '@polkadot/api';
 import type { Error, Header } from '@polkadot/types/interfaces';
 import { PoolClient } from 'pg';
-import { Block, Extrinsic } from 'types/chain';
+import { Block, Extrinsic } from './types/chain';
 import {
     GetBlockByHeightQuery,
     RegularTransaction,
@@ -10,7 +10,7 @@ import {
     UnshieldedUtxo,
     ContractCall,
     ContractBalance,
-} from 'graphql/generated';
+} from './graphql/generated';
 import {
     subscribe,
     getBlockData,
@@ -880,7 +880,7 @@ async function insertBlock(client: PoolClient, data: Block): Promise<void> {
         data.parentHash,
         data.height,
         toDate(data.timestamp),
-        data.extrinsics.length,
+        0, // tx_count
         data.stateRoot,
         data.isFinalized,
         data.raw
@@ -1065,6 +1065,10 @@ export async function detectAndImportMissingBlocks(batchSize: number = 10): Prom
                 try {
                     // GraphQLからブロックを取得（失敗しても続行）
                     graphqlBlock = await getBlockByHeight(height);
+                    if (!graphqlBlock) {
+                        console.log(`❌ ブロック ${height} のGraphQL取得エラー:`, graphqlBlock);
+                        process.exit(1);
+                    }
                 } catch (error) {
                     console.warn(`⚠️ ブロック ${height} のGraphQL取得エラー:`, error);
                     // GraphQLの取得に失敗してもPolkadot APIのデータはインポートする
