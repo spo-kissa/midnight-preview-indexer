@@ -1,6 +1,6 @@
 
 import { Pool, type PoolClient, type PoolConfig } from "pg";
-import { Block, Extrinsic } from "types/chain";
+import { Block, Extrinsic } from "./types/chain";
 
 export interface Event {
   blockId: number;
@@ -239,7 +239,6 @@ export async function clearAllData(): Promise<void> {
                     transactions,
                     tx_outputs,
                     tx_inputs,
-                    accounts,
                     account_balances,
                     account_tx,
                     shielded_notes,
